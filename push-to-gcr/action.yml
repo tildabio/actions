@@ -86,6 +86,3 @@ runs:
         cache-to: type=local,dest=/tmp/.buildx-cache
         build-args: ${{ inputs.build-args }}
         target: ${{ inputs.target }}
-
-    - shell: bash
-      run: docker context rm ${{ github.run_id }}
