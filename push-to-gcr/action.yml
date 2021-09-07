@@ -28,7 +28,7 @@ inputs:
 outputs:
   image:
     description: "Build docker image"
-    value: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}{{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
+    value: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}${{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
 runs:
   using: "composite"
   steps:
@@ -76,7 +76,7 @@ runs:
         file: ${{ inputs.path }}/Dockerfile
         builder: ${{ steps.buildx.outputs.name }}
         push: true
-        tags: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}{{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
+        tags: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}${{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache
         build-args: ${{ inputs.build-args }}
