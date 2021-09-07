@@ -72,8 +72,8 @@ runs:
       id: docker_build
       uses: docker/build-push-action@v2
       with:
-        context: {{ inputs.path }}
-        file: {{ inputs.path }}/Dockerfile
+        context: ${{ inputs.path }}
+        file: ${{ inputs.path }}/Dockerfile
         builder: ${{ steps.buildx.outputs.name }}
         push: true
         tags: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}{{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
