@@ -11,10 +11,24 @@ inputs:
     description: 'GCP project to use'
     required: false
     default: 'tilda-production'
+  path:
+    description: 'Relative path to the docker context'
+    required: false
+    default: './'
+  nameSuffix:
+    description: 'name suffix to be added to image name'
+    required: false
+    default: ''
+  build-args:
+    description: "List of build-time variables"
+    required: false
+  target:
+    description: "Sets the target stage to build"
+    required: false
 outputs:
   image:
     description: "Build docker image"
-    value: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}:${{ github.event.pull_request.head.sha || github.sha }}
+    value: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}${{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
 runs:
   using: "composite"
   steps:
@@ -56,11 +70,12 @@ runs:
       id: docker_build
       uses: docker/build-push-action@v2
       with:
-        context: ./
-        file: ./Dockerfile
+        context: ${{ inputs.path }}
+        file: ${{ inputs.path }}/Dockerfile
         builder: ${{ steps.buildx.outputs.name }}
         push: true
-        tags: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}:${{ github.event.pull_request.head.sha || github.sha }}
+        tags: gcr.io/${{ inputs.google-project }}/${{ steps.repo-name.outputs.replaced }}${{ inputs.nameSuffix }}:${{ github.event.pull_request.head.sha || github.sha }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache
-
+        build-args: ${{ inputs.build-args }}
+        target: ${{ inputs.target }}
