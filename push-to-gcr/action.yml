@@ -22,6 +22,9 @@ inputs:
   build-args:
     description: "List of build-time variables"
     required: false
+  secrets:
+    description: "List of secrets to expose to the build (eg. key=string, GIT_AUTH_TOKEN=mytoken)"
+    required: false
   target:
     description: "Sets the target stage to build"
     required: false
@@ -85,4 +88,5 @@ runs:
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache
         build-args: ${{ inputs.build-args }}
+        secrets: ${{ inputs.secrets }}
         target: ${{ inputs.target }}
