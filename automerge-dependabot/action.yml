@@ -1,0 +1,19 @@
+name: Auto Merge Dependabot
+description: Auto approve and merge PRs by Dependabot
+
+# Trigger the workflow on pull request
+inputs:
+  github-token:
+    description: "GitHub token with repo permissions"
+    required: false
+  github-ci-bot-pat:
+    description: "GitHub PAT for the ci-bot"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - if: ${{ github.actor == 'dependabot[bot]' }}
+      uses: tildabio/actions/automerge@main
+      with:
+        github-token: ${{ inputs.github-token }}
+        github-ci-bot-pat: ${{ inputs.github-ci-bot-pat }}
