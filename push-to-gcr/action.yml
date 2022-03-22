@@ -39,7 +39,7 @@ runs:
   using: "composite"
   steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         clean: false
 
@@ -51,12 +51,12 @@ runs:
         pattern: ${{ github.repository_owner }}/
         replace-with: ''
 
-    # Setup gcloud CLI
-    - uses: google-github-actions/setup-gcloud@master
+    - uses: google-github-actions/auth@v0
       with:
-        version: '270.0.0'
-        service_account_email: ${{ inputs.google-email }}
-        service_account_key: ${{ inputs.google-key }}
+        credentials_json: ${{ inputs.google-key }}
+
+    # Setup gcloud CLI
+    - uses: google-github-actions/setup-gcloud@v0
 
     # Configure docker to use the gcloud command-line tool as a credential helper
     - run: gcloud auth configure-docker
