@@ -1,0 +1,25 @@
+name: 'Golang ci lint and static checks'
+description: 'Run golang ci lint and static checks.'
+inputs:
+  workdir:
+    description: 'module name for the service'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v3
+
+    - name: golangci-lint
+      uses: reviewdog/action-golangci-lint@v2
+      env:
+        GO_MODULE_PATH: ./${{ inputs.module_name }}
+      with:
+        workdir: ${{ inputs.workdir }}/
+        fail_on_error: true
+
+    - name: static check
+      uses: reviewdog/action-staticcheck@v1
+      with:
+        workdir: ${{ inputs.workdir }}/
+        fail_on_error: true
