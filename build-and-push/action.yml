@@ -1,4 +1,4 @@
-name: 'Push to Google Artifactory'
+name: 'Build and Push to Google Artifactory'
 description: 'Build a docker container and publish it to Google Artifactory.'
 inputs:
   google-key:
@@ -19,10 +19,11 @@ inputs:
     description: 'Path to Dockerfile'
     required: false
     default: Dockerfile
-  name-suffix:
-    description: 'name suffix to be added to image name'
+  push:
+    description: 'Whether to push the image to artifactory or not'
     required: false
-    default: 'sha-'
+    type: boolean
+    default: true
   artifactory-url:
     description: 'url'
     required: false
@@ -65,12 +66,12 @@ runs:
         images: |
           ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
         tags: |
-          type=sha,enable=true,priority=100,prefix=${{ inputs.name-suffix }},suffix=,format=short
+          type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
 
     - uses: docker/build-push-action@v2
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
         builder: ${{ steps.buildx.outputs.name }}
-        push: true
+        push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}
