@@ -1,31 +1,31 @@
-name: 'Build and Push to Google Artifactory'
-description: 'Build a docker container and publish it to Google Artifactory.'
+name: "Build and Push to Google Artifactory"
+description: "Build a docker container and publish it to Google Artifactory."
 inputs:
   google-key:
-    description: 'Key to authenticate gcloud'
+    description: "Key to authenticate gcloud"
     required: true
   service-name:
-    description: 'service name'
+    description: "service name"
     required: true
   google-project:
-    description: 'GCP project to use'
+    description: "GCP project to use"
     required: false
-    default: 'tilda-dev-325721'
+    default: "tilda-dev-325721"
   context:
-    description: 'Path to the docker context'
+    description: "Path to the docker context"
     required: false
     default: .
   file:
-    description: 'Path to Dockerfile'
+    description: "Path to Dockerfile"
     required: false
     default: Dockerfile
   push:
-    description: 'Whether to push the image to artifactory or not'
+    description: "Whether to push the image to artifactory or not"
     required: false
     type: boolean
     default: true
   artifactory-url:
-    description: 'url'
+    description: "url"
     required: false
     default: us-central1-docker.pkg.dev
 outputs:
@@ -46,7 +46,7 @@ runs:
       with:
         string: ${{ github.repository }}
         pattern: ${{ github.repository_owner }}/
-        replace-with: ''
+        replace-with: ""
 
     - uses: google-github-actions/auth@v0
       with:
@@ -75,3 +75,6 @@ runs:
         builder: ${{ steps.buildx.outputs.name }}
         push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}
+
+    - run: echo ${{ steps.meta.outputs.tags }} >> $GITHUB_STEP_SUMMARY
+      shell: bash
