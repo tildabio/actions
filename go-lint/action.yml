@@ -17,6 +17,7 @@ runs:
       with:
         workdir: ${{ inputs.workdir }}/
         fail_on_error: true
+        golangci_lint_flags: '--timeout=3m'
 
     - name: static check
       uses: reviewdog/action-staticcheck@v1
