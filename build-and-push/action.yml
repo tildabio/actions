@@ -79,6 +79,8 @@ runs:
         push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}
         target: ${{ inputs.target }}
+        build-args: |
+          BUILDARG_VERSION=${{ steps.meta.outputs.version }}
 
     - run: echo ${{ steps.meta.outputs.tags }} >> $GITHUB_STEP_SUMMARY
       shell: bash
