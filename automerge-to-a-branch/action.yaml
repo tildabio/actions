@@ -1,0 +1,52 @@
+name: 'automerge a PR to a branch'
+description: 'Merges a PR to a given branch'
+inputs:
+  GH_PAT:
+    description: 'github token with permissions to run this actions'
+    required: true
+  commit-message:
+    description: 'Commit message'
+    required: true
+  committer:
+    description: 'name of user making the commit'
+    required: true
+  author:
+    description: 'user making this commit'
+    required: true
+  target-branch:
+    description: 'branch on which source PR needs to be merged'
+    required: true
+  source-branch:
+    description: "Name of the branch that needs to be merged."
+    required: true
+  tittle:
+    description: "Title of the PR"
+    required: true
+  body:
+    description: "body of the PR"
+    required: true
+  labels:
+    description: "Labels for the PR"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Create Pull Request
+      id: cpr
+      uses: peter-evans/create-pull-request@v5
+
+      with:
+        token: ${{ inputs.GH_PAT }}
+        commit-message: ${{ inputs.commit-message }}
+        committer: ${{ inputs.committer }}
+        author: ${{ inputs.author }}
+        branch: ${{ inputs.target-branch }}
+        base: ${{ inputs.source-branch }}
+        title: ${{ inputs.tittle }}
+        body: |
+          ${{ inputs.pr-body }}
+        labels: |
+          ${{ inputs.labels }}
+
