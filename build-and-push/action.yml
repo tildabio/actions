@@ -51,12 +51,12 @@ runs:
         pattern: ${{ github.repository_owner }}/
         replace-with: ""
 
-    - uses: google-github-actions/auth@v0
+    - uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ inputs.google-key }}
 
     # Setup gcloud CLI
-    - uses: google-github-actions/setup-gcloud@v0
+    - uses: google-github-actions/setup-gcloud@v1
 
     # Configure docker to use the gcloud command-line tool as a credential helper
     - run: gcloud auth configure-docker ${{ inputs.artifactory-url }}
