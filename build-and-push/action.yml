@@ -52,6 +52,7 @@ runs:
         replace-with: ""
 
     - uses: google-github-actions/auth@v1
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
       with:
         credentials_json: ${{ inputs.google-key }}
 
