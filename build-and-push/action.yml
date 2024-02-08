@@ -89,7 +89,7 @@ runs:
         builder: ${{ steps.buildx.outputs.name }}
         push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}
-        target: target
+        target: ${{ env.TARGET_ENV }}
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
 
