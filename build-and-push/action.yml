@@ -31,6 +31,10 @@ inputs:
   target:
     description: "Sets the target stage to build"
     required: false
+  test-tag:
+    description: tag for running tests
+    required: true
+
 outputs:
   image:
     description: "Build docker image"
@@ -78,10 +82,11 @@ runs:
         file: ${{ inputs.file }}
         builder: ${{ steps.buildx.outputs.name }}
         push: ${{ inputs.push }}
-        tags: ${{ steps.meta.outputs.tags }}
+        tags: ${{ steps.meta.outputs.tags }}, ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
         target: ${{ inputs.target }}
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
+        if: ${{ inputs.test-tag != '' }}
 
     - run: echo ${{ steps.meta.outputs.tags }} >> $GITHUB_STEP_SUMMARY
       shell: bash
