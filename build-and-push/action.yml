@@ -67,6 +67,9 @@ runs:
     - run: gcloud auth configure-docker ${{ inputs.artifactory-url }}
       shell: bash
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Docker meta
       id: meta
       uses: docker/metadata-action@v4
@@ -76,7 +79,7 @@ runs:
         tags: |
           type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
 
-    - uses: docker/setup-buildx-action@v3
+    - uses: docker/build-push-action@v4
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
