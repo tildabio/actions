@@ -72,12 +72,12 @@ runs:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
         push: ${{ inputs.push }}
-        tags: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
+        tags: ${{ steps.meta.outputs.tags }}, ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
         target: ${{ inputs.target }}
+        build-args: |
+          BUILDARG_VERSION=${{ steps.meta.outputs.version }}
         cache: true
         cache-repository: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
-        build-args: |
-          BUILDARG_VERSION=${{ inputs.test-tag }}
 
           
 
