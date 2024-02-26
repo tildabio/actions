@@ -1,0 +1,85 @@
+name: "Build and Push to Google Artifactory"
+description: "Build a docker container and publish it to Google Artifactory."
+inputs:
+  google-key:
+    description: "Key to authenticate gcloud"
+    required: true
+  service-name:
+    description: "service name"
+    required: true
+  google-project:
+    description: "GCP project to use"
+    required: false
+    default: "tilda-dev-325721"
+  context:
+    description: "Path to the docker context"
+    required: false
+    default: .
+  file:
+    description: "Path to Dockerfile"
+    required: false
+    default: Dockerfile
+  push:
+    description: "Whether to push the image to artifactory or not"
+    required: false
+    type: boolean
+    default: true
+  artifactory-url:
+    description: "url"
+    required: false
+    default: us-central1-docker.pkg.dev
+  target:
+    description: "Sets the target stage to build"
+    required: false
+  test-tag:
+    description: tag for running tests
+    required: true
+
+outputs:
+  image:
+    description: "Build docker image"
+    value: testing custom action
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        clean: false
+
+    - name: Repo Name
+      id: repo-name
+      uses: frabert/replace-string-action@v2.0
+      with:
+        string: ${{ github.repository }}
+        pattern: ${{ github.repository_owner }}/
+        replace-with: ""
+
+    - uses: google-github-actions/auth@v1
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      with:
+        credentials_json: ${{ inputs.google-key }}
+
+    # Setup gcloud CLI
+    - uses: google-github-actions/setup-gcloud@v1
+
+    # Configure docker to use the gcloud command-line tool as a credential helper
+    - run: gcloud auth configure-docker ${{ inputs.artifactory-url }}
+      shell: bash
+
+    - uses: int128/kaniko-action@v1
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.meta.outputs.tags }}, ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
+        target: ${{ inputs.target }}
+        cache: true
+        cache-repository: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
+        build-args: |
+          BUILDARG_VERSION=${{ steps.meta.outputs.version }}
+
+          
+
+    - run: echo ${{ steps.meta.outputs.tags }} >> $GITHUB_STEP_SUMMARY
+      shell: bash
