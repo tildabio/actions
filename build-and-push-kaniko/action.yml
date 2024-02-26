@@ -82,6 +82,7 @@ runs:
         cat /home/runner/.docker/config.json
 
     - name: Getconfig
+      shell: bash
       id: config
       run: echo "config=$(cat /home/runner/.docker/config.json)" >> $GITHUB_OUTPUT
 
@@ -90,6 +91,7 @@ runs:
       run: |
         cat /home/runner/.docker/config.json
         echo ${{ env.config }}
+
 
     - uses: int128/kaniko-action@v1
       with:
