@@ -77,7 +77,8 @@ runs:
           type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
 
     - name: test configure
-      run: cat /home/runner/.docker/config.json
+        run: |
+          cat /home/runner/.docker/config.json
 
     - uses: int128/kaniko-action@v1
       with:
