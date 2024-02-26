@@ -72,7 +72,7 @@ runs:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
         push: ${{ inputs.push }}
-        tags: ${{ steps.meta.outputs.tags }}, ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
+        tags: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
         target: ${{ inputs.target }}
         cache: true
         cache-repository: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
