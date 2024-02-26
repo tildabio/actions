@@ -77,7 +77,7 @@ runs:
         cache: true
         cache-repository: ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
         build-args: |
-          BUILDARG_VERSION=${{ steps.meta.outputs.version }}
+          BUILDARG_VERSION=${{ inputs.test-tag }}
 
           
 
