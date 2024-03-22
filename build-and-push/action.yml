@@ -86,8 +86,8 @@ runs:
         push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}, ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:${{ inputs.test-tag }}
         target: ${{ inputs.target }}
-        cache-from: type=registry,ref=${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
-        cache-to: type=registry,ref=${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache,mode=max,image-manifest=true
+        # cache-from: type=registry,ref=${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache
+        # cache-to: type=registry,ref=${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/dockercache,mode=max,image-manifest=true
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
 
