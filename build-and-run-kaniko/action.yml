@@ -120,10 +120,10 @@ runs:
     # Lets try this as well for self hosted runners. 
     # - name: 'Set up Cloud SDK'
     #   uses: 'google-github-actions/setup-gcloud@v2'
-    # - id: 'auth'
-    #   uses: 'google-github-actions/auth@v2'
-    #   with:
-    #     credentials_json: '${{ inputs.gcp-credentials }}'
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ inputs.gcp-credentials }}'
 
     - name: 'Set up Cloud SDK'
       uses: 'google-github-actions/setup-gcloud@v2'
