@@ -54,6 +54,10 @@ inputs:
   gcp-credentials:
     description: gcp credentials json
     required: true
+  pod-namespace:
+    description: namespace where pod should be deployed. 
+    required: false
+    default: default
 
 outputs:
   image:
@@ -70,7 +74,7 @@ runs:
         kind: Pod
         metadata:
           name: ${{ inputs.service-folder-name }}-kaniko-pod
-          namespace: default
+          namespace: ${{ inputs.pod-namespace }}
         spec:
           initContainers:
           - name: downloadcode
@@ -140,27 +144,35 @@ runs:
       run: |-
         kubectl apply -f kaniko-pod.yaml
 
-    - name: Monitor pod status
+
+    - name: create monitor script
       shell: bash
-      env:
-        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
-      run: |-
-        while [[ $(kubectl get pods $buildImageName -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') != "Failed" ]];
+      run: |
+        cat > monitor-pod.sh <<EOF
+        while [[ $(kubectl get pods -n $ns $buildImageName -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') != "Failed" ]];
         do
-          if [ $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
-            kubectl logs  $buildImageName
-            kubectl delete pod  $buildImageName
+          if [ $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
+            kubectl logs $buildImageName -n $ns
+            kubectl delete pod -n $ns $buildImageName
             exit 1
           fi
           echo "waiting for pod to initialise" && sleep 1;
         done
 
         # Monitor for Success or failure
-        kubectl logs  $buildImageName -f
+        kubectl logs -n $ns  $buildImageName -f
 
-        if [ $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
-          kubectl delete pod  $buildImageName
+        if [ $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
+          kubectl delete pod -n $ns $buildImageName
           exit 1
         fi
 
-        kubectl delete pod  $buildImageName
+        kubectl delete pod -n $ns $buildImageName
+        EOF
+        cat monitor-pod.sh
+    - name: Monitor pod status
+      shell: bash
+      env:
+        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
+        ns: ${{ inputs.pod-namespace }}
+      run: sh monitor-po.sh
