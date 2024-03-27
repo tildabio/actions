@@ -1,0 +1,161 @@
+name: "Build and Run Kaniko Pod on K8s cluster"
+description: "Build a yaml pod definition from a template and deploys it on a kubernetes cluster"
+inputs:
+  gh-token:
+    description: "GitHub Token"
+    required: true
+  gh-repo-owner:
+    description: "GitHub repo owner name"
+    default: tildabio
+    required: false
+  gh-repo-name:
+    description: "GitHub repo name"
+    required: false
+    default: "main"
+  gh-repo-branch-name:
+    description: "GitHub repo branch to pull"
+    required: false
+    default: "master"
+  service-folder-name:
+    description: "name of the folder within repo where Dockerfile lies"
+    required: true
+  artifactory-gcr-repo-name:
+    description: "name of the gcr repo for the given service."
+    required: true
+    type: boolean
+  artifactory-url:
+    description: "url"
+    required: false
+    default: us-central1-docker.pkg.dev
+  artifactory-gcp-project-id:
+    description: "GCP of the project where this artifactory repo is present"
+    required: false
+    default: tilda-dev-325721
+  artifactory-path:
+    description: path for this image within artifactory repo
+    required: true
+    default: artifacts/services
+  artifactory-image-tag:
+    description: image tag
+    required: true
+  artifactory-cache-repo-name:
+    description: location for kaniko to store cache
+    required: false
+    default: kaniko
+  gcloud-service-account:
+    description: Service Account in gcloud that can deploy on GKE
+    required: true
+  gke-cluster:
+    description: name of the GKE cluster
+    required: true
+  gke-cluster-zone:
+    description: zone in which gke cluster is deployed
+    required: true
+
+
+
+outputs:
+  image:
+    description: "Build docker image"
+    value: testing custom action
+runs:
+  using: "composite"
+  steps:
+    - name: Create pod manifest from template
+      shell: bash
+      run: |
+        cat kaniko-pod.yaml <<EOF
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ${{ inputs.service-folder-name }}-kaniko-pod
+        spec:
+          initContainers:
+          - name: downloadcode
+            image: alpine/git
+            command:
+              - /bin/sh
+              - '-c'
+              - |
+                git clone https://${{ inputs.gh-token }}:x-oauth-basic@github.com/${{ inputs.gh-repo-owner }}/${{ inputs.gh-repo-name }}.git --branch ${{ inputs.gh-repo-branch-name }} --single-branch /workspace/
+                echo code downloaded.
+                ls /workspace/
+            volumeMounts:
+              - name: workspace
+                mountPath: "/workspace"
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:latest
+            args:
+              - "--dockerfile"
+              - "/workspace/${{ inputs.service-folder-name }}/Dockerfile"
+              - "--destination" 
+              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.service-gcr-repo-name }}:${{ inputs.image-tag }}"
+              - "--context"
+              - "/workspace/"
+              - "--cache=true"
+              - "--cache-repo=${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-cache-repo-name }}"
+              - "--cache-ttl=8640h"
+            volumeMounts:
+            - name: workspace
+              mountPath: "/workspace"  
+            - name: modules-volume
+              mountPath: /cache
+            env:
+              - name: GOCACHE
+                value: "/cache"
+          serviceAccount: kaniko-sa
+          restartPolicy: Never
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: modules-volume
+            persistentVolumeClaim:
+              claimName: kaniko-modules-pvc
+        EOF
+        cat kaniko-pod.yaml
+    # Lets try this as well for self hosted runners. 
+    # - name: 'Set up Cloud SDK'
+    #   uses: 'google-github-actions/setup-gcloud@v2'
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    - uses: google-github-actions/get-gke-credentials@db150f2cc60d1716e61922b832eae71d2a45938f
+      with:
+        cluster_name: ${{ inputs.gke-cluster }}
+        location: ${{ inputs.gke-cluster-zone }}
+        credentials: ${{ secrets.GCP_CREDENTIALS }}
+
+
+    - name: Deploy pod
+      run: |-
+        kubectl apply -f kaniko-pod.yaml
+
+    - name: Monitor pod status
+      env:
+        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
+      run: |-
+        while [[ $(kubectl get pods $(buildImageName) -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') != "Failed" ]];
+        do
+          if [ $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') == "Failed" ]; then
+            kubectl logs  $(buildImageName)
+            kubectl delete pod  $(buildImageName)
+            exit 1
+          fi
+          echo "waiting for pod to initialise" && sleep 1;
+        done
+
+        # Monitor for Success or failure
+        kubectl logs  $(buildImageName) -f
+
+        if [ $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') == "Failed" ]; then
+          kubectl delete pod  $(buildImageName)
+          exit 1
+        fi
+
+        kubectl delete pod  $(buildImageName)
