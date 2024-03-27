@@ -51,8 +51,9 @@ inputs:
   gke-cluster-zone:
     description: zone in which gke cluster is deployed
     required: true
-
-
+  gcp-credentials:
+    description: gcp credentials json
+    required: true
 
 outputs:
   image:
@@ -120,7 +121,7 @@ runs:
     - id: 'auth'
       uses: 'google-github-actions/auth@v2'
       with:
-        credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+        credentials_json: '${{ inputs.gcp-credentials }}'
 
     - name: 'Set up Cloud SDK'
       uses: 'google-github-actions/setup-gcloud@v2'
@@ -129,14 +130,16 @@ runs:
       with:
         cluster_name: ${{ inputs.gke-cluster }}
         location: ${{ inputs.gke-cluster-zone }}
-        credentials: ${{ secrets.GCP_CREDENTIALS }}
+        credentials: ${{ secrets.gcp-credentials }}
 
 
     - name: Deploy pod
+      shell: bash
       run: |-
         kubectl apply -f kaniko-pod.yaml
 
     - name: Monitor pod status
+      shell: bash
       env:
         buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
       run: |-
