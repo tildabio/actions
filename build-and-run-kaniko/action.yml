@@ -44,7 +44,7 @@ inputs:
     default: kaniko
   gcloud-service-account:
     description: Service Account in gcloud that can deploy on GKE
-    required: true
+    required: false
   gke-cluster:
     description: name of the GKE cluster
     required: true
@@ -90,7 +90,7 @@ runs:
               - "--dockerfile"
               - "/workspace/${{ inputs.service-folder-name }}/Dockerfile"
               - "--destination" 
-              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.service-gcr-repo-name }}:${{ inputs.image-tag }}"
+              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ inputs.image-tag }}"
               - "--context"
               - "/workspace/"
               - "--cache=true"
