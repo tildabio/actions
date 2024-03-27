@@ -70,6 +70,7 @@ runs:
         kind: Pod
         metadata:
           name: ${{ inputs.service-folder-name }}-kaniko-pod
+          namespace: default
         spec:
           initContainers:
           - name: downloadcode
@@ -110,6 +111,7 @@ runs:
           volumes:
           - name: workspace
             emptyDir: {}
+
           - name: modules-volume
             persistentVolumeClaim:
               claimName: kaniko-modules-pvc
