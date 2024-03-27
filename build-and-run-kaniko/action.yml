@@ -92,7 +92,7 @@ runs:
               - "--dockerfile"
               - "/workspace/${{ inputs.service-folder-name }}/Dockerfile"
               - "--destination" 
-              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ inputs.image-tag }}"
+              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ inputs.artifactory-image-tag }}"
               - "--context"
               - "/workspace/"
               - "--cache=true"
@@ -145,22 +145,22 @@ runs:
       env:
         buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
       run: |-
-        while [[ $(kubectl get pods $(buildImageName) -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') != "Failed" ]];
+        while [[ $(kubectl get pods $buildImageName -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') != "Failed" ]];
         do
-          if [ $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') == "Failed" ]; then
-            kubectl logs  $(buildImageName)
-            kubectl delete pod  $(buildImageName)
+          if [ $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
+            kubectl logs  $buildImageName
+            kubectl delete pod  $buildImageName
             exit 1
           fi
           echo "waiting for pod to initialise" && sleep 1;
         done
 
         # Monitor for Success or failure
-        kubectl logs  $(buildImageName) -f
+        kubectl logs  $buildImageName -f
 
-        if [ $(kubectl get pods $(buildImageName)  -o jsonpath='{..status.phase}') == "Failed" ]; then
-          kubectl delete pod  $(buildImageName)
+        if [ $(kubectl get pods $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
+          kubectl delete pod  $buildImageName
           exit 1
         fi
 
-        kubectl delete pod  $(buildImageName)
+        kubectl delete pod  $buildImageName
