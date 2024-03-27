@@ -143,12 +143,14 @@ runs:
       shell: bash
       run: |-
         kubectl apply -f kaniko-pod.yaml
-
-
-    - name: create monitor script
+    
+    - name: Monitor pod status
       shell: bash
-      run: |
-        cat > monitor-pod.sh <<EOF
+      env:
+        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
+        ns: ${{ inputs.pod-namespace }}
+      run: |-
+        bash -c '
         while [[ $(kubectl get pods -n $ns $buildImageName -o jsonpath='{..status.phase}') != "Running" && $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') != "Failed" ]];
         do
           if [ $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
@@ -167,12 +169,4 @@ runs:
           exit 1
         fi
 
-        kubectl delete pod -n $ns $buildImageName
-        EOF
-        cat monitor-pod.sh
-    - name: Monitor pod status
-      shell: bash
-      env:
-        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
-        ns: ${{ inputs.pod-namespace }}
-      run: sh monitor-po.sh
+        kubectl delete pod -n $ns $buildImageName'
