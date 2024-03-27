@@ -130,7 +130,7 @@ runs:
       with:
         cluster_name: ${{ inputs.gke-cluster }}
         location: ${{ inputs.gke-cluster-zone }}
-        credentials: ${{ secrets.gcp-credentials }}
+        credentials: ${{ inputs.gcp-credentials }}
 
 
     - name: Deploy pod
