@@ -65,7 +65,7 @@ runs:
     - name: Create pod manifest from template
       shell: bash
       run: |
-        cat kaniko-pod.yaml <<EOF
+        cat > kaniko-pod.yaml <<EOF
         apiVersion: v1
         kind: Pod
         metadata:
