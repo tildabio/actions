@@ -73,7 +73,7 @@ runs:
         apiVersion: v1
         kind: Pod
         metadata:
-          name: ${{ inputs.service-folder-name }}-kaniko-pod
+          name: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod
           namespace: ${{ inputs.pod-namespace }}
         spec:
           nodeSelector:
