@@ -76,6 +76,12 @@ runs:
           name: ${{ inputs.service-folder-name }}-kaniko-pod
           namespace: ${{ inputs.pod-namespace }}
         spec:
+          nodeSelector:
+            workload: arc
+          tolerations:
+          - key: arc
+            operator: "Exists"
+            effect: NoSchedule
           initContainers:
           - name: downloadcode
             image: alpine/git
@@ -83,12 +89,19 @@ runs:
               - /bin/sh
               - '-c'
               - |
-                git clone https://${{ inputs.gh-token }}:x-oauth-basic@github.com/${{ inputs.gh-repo-owner }}/${{ inputs.gh-repo-name }}.git --branch ${{ inputs.gh-repo-branch-name }} --single-branch /workspace/
+                git clone https://${{ inputs.gh-token }}:x-oauth-basic@github.com/${{ inputs.gh-repo-owner }}/${{ inputs.gh-repo-name }}.git /repo/${{ inputs.gh-repo-name }}
                 echo code downloaded.
+                cd /repo/${{ inputs.gh-repo-name }}
+                git checkout origin/${{ inputs.gh-repo-branch-name }}
+                git pull origin ${{ inputs.gh-repo-branch-name }}
+                echo branch checked out, initiating copy
+                cp -r /repo/main/* /workspace
                 ls /workspace/
             volumeMounts:
               - name: workspace
                 mountPath: "/workspace"
+              - name: repo-volume
+                mountPath: "/repo"
           containers:
           - name: kaniko
             image: gcr.io/kaniko-project/executor:latest
@@ -115,22 +128,19 @@ runs:
           volumes:
           - name: workspace
             emptyDir: {}
-
           - name: modules-volume
             persistentVolumeClaim:
               claimName: kaniko-modules-pvc
+          - name: repo-volume
+            persistentVolumeClaim:
+              claimName: kaniko-repo-pvc
         EOF
         cat kaniko-pod.yaml
-    # Lets try this as well for self hosted runners. 
-    # - name: 'Set up Cloud SDK'
-    # #   uses: 'google-github-actions/setup-gcloud@v2'
+
     - id: 'auth'
       uses: 'google-github-actions/auth@v2'
       with:
         credentials_json: '${{ inputs.gcp-credentials }}'
-
-    # - name: 'Set up Cloud SDK'
-    #   uses: 'google-github-actions/setup-gcloud@v2'
 
     - uses: google-github-actions/get-gke-credentials@db150f2cc60d1716e61922b832eae71d2a45938f
       with:
