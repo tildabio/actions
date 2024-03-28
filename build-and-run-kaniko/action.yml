@@ -158,7 +158,7 @@ runs:
     - name: Monitor pod status
       shell: bash
       env:
-        buildImageName: ${{ inputs.service-folder-name }}-kaniko-pod
+        buildImageName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod
         ns: ${{ inputs.pod-namespace }}
       run: |-
         bash -c '
