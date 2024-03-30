@@ -66,6 +66,15 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: |
+          ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
+        tags: |
+          type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
+
     - name: Create pod manifest from template
       shell: bash
       run: |
@@ -112,7 +121,7 @@ runs:
               - "--dockerfile"
               - "/workspace/${{ inputs.service-folder-name }}/Dockerfile"
               - "--destination" 
-              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ inputs.artifactory-image-tag }}"
+              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ steps.meta.outputs.tags }}"
               - "--context"
               - "/workspace/"
               - "--cache=true"
