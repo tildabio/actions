@@ -104,11 +104,11 @@ runs:
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
                 echo branch checked out, initiating copy
-                cp -r /repo/main/* /workspace
+                cp -rT /repo/main/ /workspace
                 cd /workspace
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
-                ls /workspace/
+                ls -la /workspace/
             volumeMounts:
               - name: workspace
                 mountPath: "/workspace"
