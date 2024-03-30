@@ -71,7 +71,7 @@ runs:
       uses: docker/metadata-action@v4
       with:
         images: |
-          ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
+          ${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/artifacts/services/${{ inputs.artifactory-gcr-repo-name }}
         tags: |
           type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
 
@@ -121,7 +121,7 @@ runs:
               - "--dockerfile"
               - "/workspace/${{ inputs.service-folder-name }}/Dockerfile"
               - "--destination" 
-              - "${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-gcr-repo-name }}:${{ steps.meta.outputs.tags }}"
+              - "${{ steps.meta.outputs.tags }}"
               - "--context"
               - "/workspace/"
               - "--cache=true"
