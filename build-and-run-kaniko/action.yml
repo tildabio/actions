@@ -124,9 +124,6 @@ runs:
               - "${{ steps.meta.outputs.tags }}"
               - "--context"
               - "/workspace/"
-              - "--cache=true"
-              - "--cache-repo=${{ inputs.artifactory-url }}/${{ inputs.artifactory-gcp-project-id }}/${{ inputs.artifactory-path }}/${{ inputs.artifactory-cache-repo-name }}"
-              - "--cache-ttl=8640h"
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
