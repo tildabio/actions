@@ -139,7 +139,7 @@ runs:
           restartPolicy: Never
           volumes:
           - name: workspace
-            emptyDir: {}
+            emptyDir: { }
           - name: modules-volume
             persistentVolumeClaim:
               claimName: kaniko-modules-pvc
