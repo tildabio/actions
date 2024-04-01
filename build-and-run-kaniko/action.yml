@@ -124,6 +124,8 @@ runs:
               - "${{ steps.meta.outputs.tags }}"
               - "--context"
               - "/workspace/"
+              - "--single-snapshot"
+              - "--snapshot-mode=redo"
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
