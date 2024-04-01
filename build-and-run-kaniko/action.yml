@@ -142,7 +142,7 @@ runs:
             emptyDir: { }
           - name: modules-volume
             persistentVolumeClaim:
-              claimName: kaniko-modules-pvc
+              claimName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-modules-pvc
           - name: repo-volume
             persistentVolumeClaim:
               claimName: kaniko-repo-pvc
