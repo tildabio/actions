@@ -126,11 +126,15 @@ runs:
               - "/workspace/"
               - "--single-snapshot"
               - "--snapshot-mode=redo"
+              - "--cache=true"
+              - "--cache-dir=/kaniko-cache"
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
             - name: modules-volume
               mountPath: /cache
+            - name: kaniko-cache
+              mountPath: /kaniko-cache
             env:
               - name: GOCACHE
                 value: "/cache"
@@ -145,6 +149,9 @@ runs:
           - name: repo-volume
             persistentVolumeClaim:
               claimName: kaniko-repo-pvc
+          - name: kaniko-cache
+            persistentVolumeClaim:
+              claimName: kaniko-cache
         EOF
         cat kaniko-pod.yaml
 
