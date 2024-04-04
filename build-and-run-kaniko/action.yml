@@ -98,13 +98,13 @@ runs:
               - /bin/sh
               - '-c'
               - |
-                git clone https://${{ inputs.gh-token }}:x-oauth-basic@github.com/${{ inputs.gh-repo-owner }}/${{ inputs.gh-repo-name }}.git /repo/${{ inputs.gh-repo-name }}
+                git clone https://${{ inputs.gh-token }}:x-oauth-basic@github.com/${{ inputs.gh-repo-owner }}/${{ inputs.gh-repo-name }}.git /cache/repo/${{ inputs.gh-repo-name }}
                 echo code downloaded.
-                cd /repo/${{ inputs.gh-repo-name }}
+                cd /cache/repo/${{ inputs.gh-repo-name }}
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
                 echo branch checked out, initiating copy
-                cp -rT /repo/main/ /workspace
+                cp -rT /cache/repo/main/ /workspace
                 cd /workspace
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
@@ -112,8 +112,8 @@ runs:
             volumeMounts:
               - name: workspace
                 mountPath: "/workspace"
-              - name: repo-volume
-                mountPath: "/repo"
+              - name: modules-volume
+                mountPath: /cache
           containers:
           - name: kaniko
             image: gcr.io/kaniko-project/executor:latest
@@ -146,9 +146,6 @@ runs:
           - name: modules-volume
             persistentVolumeClaim:
               claimName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-modules-pvc
-          - name: repo-volume
-            persistentVolumeClaim:
-              claimName: kaniko-repo-pvc
           - name: kaniko-cache
             persistentVolumeClaim:
               claimName: kaniko-cache
