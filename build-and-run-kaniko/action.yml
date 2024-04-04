@@ -126,7 +126,7 @@ runs:
               - "/workspace/"
               - "--single-snapshot"
               - "--snapshot-mode=redo"
-              - "--cache=false"
+              - "--cache=true"
               - "--cache-dir=/kaniko-cache"
             volumeMounts:
             - name: workspace
