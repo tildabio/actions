@@ -128,7 +128,7 @@ runs:
               - "--snapshot-mode=redo"
               - "--cache=false"
               - "--cache-dir=/kaniko-cache"
-              - "--build-arg BUILDARG_VERSION=${{ steps.meta.outputs.version }}"
+              - "--build-arg=BUILDARG_VERSION=${{ steps.meta.outputs.version }}"
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
