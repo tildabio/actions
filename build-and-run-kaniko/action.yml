@@ -82,7 +82,7 @@ runs:
         apiVersion: v1
         kind: Pod
         metadata:
-          name: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod
+          name: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod-${{ steps.meta.outputs.version }}
           namespace: ${{ inputs.pod-namespace }}
         spec:
           nodeSelector:
@@ -128,6 +128,7 @@ runs:
               - "--snapshot-mode=redo"
               - "--cache=false"
               - "--cache-dir=/kaniko-cache"
+              - "--build-arg BUILDARG_VERSION=${{ steps.meta.outputs.version }}
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
@@ -173,7 +174,7 @@ runs:
     - name: Monitor pod status
       shell: bash
       env:
-        buildImageName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod
+        buildImageName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-pod-${{ steps.meta.outputs.version }}
         ns: ${{ inputs.pod-namespace }}
       run: |-
         bash -c '
@@ -181,18 +182,18 @@ runs:
         do
           if [ $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
             kubectl logs $buildImageName -n $ns
-            # kubectl delete pod -n $ns $buildImageName
+            kubectl delete pod -n $ns $buildImageName
             exit 1
           fi
           echo "waiting for pod to initialise" && sleep 1;
         done
 
-        # Monitor for Success or failure
+        Monitor for Success or failure
         kubectl logs -n $ns  $buildImageName -f
 
         if [ $(kubectl get pods -n $ns $buildImageName  -o jsonpath='{..status.phase}') == "Failed" ]; then
-          # kubectl delete pod -n $ns $buildImageName
+          kubectl delete pod -n $ns $buildImageName
           exit 1
         fi
 
-        # kubectl delete pod -n $ns $buildImageName'
+        kubectl delete pod -n $ns $buildImageName'
