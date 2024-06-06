@@ -58,6 +58,10 @@ inputs:
     description: namespace where pod should be deployed. 
     required: false
     default: default
+  project_id:
+    description: project id
+    required: false
+    default: tilda-trial-automation
 
 outputs:
   image:
@@ -86,7 +90,10 @@ runs:
           namespace: ${{ inputs.pod-namespace }}
         spec:
           nodeSelector:
-            workload: arc
+            cloud.google.com/compute-class: Performance
+            cloud.google.com/gke-spot: "true"
+            cloud.google.com/machine-family: c3
+            # supported-cpu-platform.cloud.google.com/AMD_Milan: "true"
           tolerations:
           - key: arc
             operator: "Exists"
@@ -116,6 +123,10 @@ runs:
                 mountPath: /cache
           containers:
           - name: kaniko
+            resources:
+              limits:
+                cpu: 2000m
+                memory: 6Gi
             image: gcr.io/kaniko-project/executor:latest
             args:
               - "--dockerfile"
@@ -163,7 +174,7 @@ runs:
         cluster_name: ${{ inputs.gke-cluster }}
         location: ${{ inputs.gke-cluster-zone }}
         credentials: ${{ inputs.gcp-credentials }}
-        project_id: tilda-trial-dev
+        project_id: ${{ inputs.project_id }}
 
 
     - name: Deploy pod
