@@ -33,7 +33,7 @@ inputs:
     default: tilda-dev-325721
   artifactory-path:
     description: path for this image within artifactory repo
-    required: true
+    required: false
     default: artifacts/services
   artifactory-image-tag:
     description: image tag
@@ -47,26 +47,27 @@ inputs:
     required: false
   gke-cluster:
     description: name of the GKE cluster
-    required: true
+    default: master
+    required: false
   gke-cluster-zone:
     description: zone in which gke cluster is deployed
-    required: true
+    default: us-central1
+    required: false
   gcp-credentials:
     description: gcp credentials json
     required: true
   pod-namespace:
     description: namespace where pod should be deployed. 
     required: false
-    default: default
+    default: arc-runners
   project_id:
     description: project id
     required: false
     default: tilda-trial-automation
-
-outputs:
-  image:
-    description: "Build docker image"
-    value: testing custom action
+  machine-family:
+    description: machine-family
+    required: false
+    default: c3
 runs:
   using: "composite"
   steps:
@@ -90,14 +91,7 @@ runs:
           namespace: ${{ inputs.pod-namespace }}
         spec:
           nodeSelector:
-            cloud.google.com/compute-class: Performance
             cloud.google.com/gke-spot: "true"
-            cloud.google.com/machine-family: c3
-            # supported-cpu-platform.cloud.google.com/AMD_Milan: "true"
-          tolerations:
-          - key: arc
-            operator: "Exists"
-            effect: NoSchedule
           initContainers:
           - name: downloadcode
             image: alpine/git
@@ -111,7 +105,7 @@ runs:
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
                 echo branch checked out, initiating copy
-                cp -rT /cache/repo/main/ /workspace
+                cp -rT /cache/repo/${{ inputs.gh-repo-name }}/ /workspace
                 cd /workspace
                 git checkout origin/${{ inputs.gh-repo-branch-name }}
                 git pull origin ${{ inputs.gh-repo-branch-name }}
@@ -125,8 +119,9 @@ runs:
           - name: kaniko
             resources:
               limits:
-                cpu: 2000m
-                memory: 6Gi
+                ephemeral-storage: 8Gi
+                cpu: 3000m
+                memory: 8Gi
             image: gcr.io/kaniko-project/executor:latest
             args:
               - "--dockerfile"
@@ -138,15 +133,12 @@ runs:
               - "--single-snapshot"
               - "--snapshot-mode=redo"
               - "--cache=false"
-              - "--cache-dir=/kaniko-cache"
               - "--build-arg=BUILDARG_VERSION=${{ steps.meta.outputs.version }}"
             volumeMounts:
             - name: workspace
               mountPath: "/workspace"  
             - name: modules-volume
               mountPath: /cache
-            - name: kaniko-cache
-              mountPath: /kaniko-cache
             env:
               - name: GOCACHE
                 value: "/cache"
@@ -158,9 +150,6 @@ runs:
           - name: modules-volume
             persistentVolumeClaim:
               claimName: ${{ inputs.artifactory-gcr-repo-name }}-kaniko-modules-pvc
-          - name: kaniko-cache
-            persistentVolumeClaim:
-              claimName: kaniko-cache
         EOF
         cat kaniko-pod.yaml
 
@@ -208,3 +197,7 @@ runs:
         fi
 
         kubectl delete pod -n $ns $buildImageName'
+outputs:
+  image:
+    description: "Built Docker image"
+    value: ${{ steps.meta.outputs.image }}
