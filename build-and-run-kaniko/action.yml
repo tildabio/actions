@@ -68,6 +68,18 @@ inputs:
     description: machine-family
     required: false
     default: c3
+  GCHAT_SPACE:
+    description: where to post msg
+    required: true
+    default: XXXX
+  GCHAT_TOKEN:
+    description: token for gchat
+    required: true
+    default: XXXX
+  GCHAT_KEY:
+    description: gchat key for notification
+    required: true
+    default: XXXX
 runs:
   using: "composite"
   steps:
@@ -197,6 +209,33 @@ runs:
         fi
 
         kubectl delete pod -n $ns $buildImageName'
+
+    - name: Dump GitHub context
+      shell: bash
+      if: failure()
+      env:
+        GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: |
+        echo ${{ toJson(github) }}
+        echo 
+
+    - name: Send Gchat notification
+      uses: tildabio/actions/gchat@gchat
+      if: success()
+      with:
+        message: "✅ Build Succeeded for ${{ inputs.service-folder-name }} on tag ${{ steps.meta.outputs.version }}\nURL: ${{ github.event.commits[0].url }}\nActor: ${{ github.actor }}\nImage: ${{ steps.meta.outputs.tags }}"
+        space: ${{ inputs.GCHAT_SPACE }}
+        gchat_key: ${{ inputs.GCHAT_KEY }}
+        gchat_token: ${{ inputs.GCHAT_TOKEN }}
+
+    - name: Send Gchat notification
+      uses: tildabio/actions/gchat@gchat
+      if: failure()
+      with:
+        message: "❌ Build Failed for for ${{ inputs.service-folder-name }} on tag ${{ steps.meta.outputs.version }}\nURL: ${{ github.event.commits[0].url }}\nActor: ${{ github.actor }}\n"
+        space: ${{ inputs.GCHAT_SPACE }}
+        gchat_key: ${{ inputs.GCHAT_KEY }}
+        gchat_token: ${{ inputs.GCHAT_TOKEN }}
 outputs:
   image:
     description: "Built Docker image"
