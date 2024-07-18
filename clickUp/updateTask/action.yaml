@@ -1,0 +1,38 @@
+name: 'Update ClickUp task'
+description: 'Updates a task in ClickUp'
+inputs:
+  team-id:
+    description: 'ClickUp TeamID'
+    required: false
+    default: "8465282"
+  task-id:
+    description: 'ID of task which needs update'
+    required: true
+  clickup-api-key:
+    description: 'Key to authenticate ClickUp'
+    required: true
+  status:
+    description: 'Task status'
+    required: true
+  comment_text:
+    description: 'Comment text'
+    required: true
+
+  
+runs:
+  using: "composite"
+  steps:
+    - name: Update Clickup task
+      id: update-clickup
+      shell: bash
+      run: |
+        echo "Updating Clickup task"
+
+        curl -i -X POST \
+          --url 'https://api.clickup.com/api/v2/task/${{ inputs.task-id }}/comment?custom_task_ids=true&team_id=${{ inputs.team-id }}' \
+          --header 'Authorization: ${{ inputs.clickup-api-key }}' \
+          --header 'Content-Type: application/json' \
+          --data '{
+              "status": "${{ inputs.status }}",
+              "comment_text": "${{ inputs.comment_text }}"
+          }'
