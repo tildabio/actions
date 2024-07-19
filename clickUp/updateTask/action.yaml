@@ -11,9 +11,6 @@ inputs:
   clickup-api-key:
     description: 'Key to authenticate ClickUp'
     required: true
-  status:
-    description: 'Task status'
-    required: true
   comment_text:
     description: 'Comment text'
     required: true
@@ -33,6 +30,5 @@ runs:
           --header 'Authorization: ${{ inputs.clickup-api-key }}' \
           --header 'Content-Type: application/json' \
           --data '{
-              "status": "${{ inputs.status }}",
               "comment_text": "${{ inputs.comment_text }}"
           }'
