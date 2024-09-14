@@ -34,10 +34,14 @@ inputs:
   build_args:
     description: 'Additional build arguments as a string'
     required: false
+  merge-into:
+    description: 'Branch to merge into before building'
+    required: false
+    default: 'main'
 outputs:
   image:
     description: "Build docker image"
-    value: testing custom action
+    value: ${{ steps.meta.outputs.tags }}
 runs:
   using: "composite"
   steps:
@@ -45,6 +49,16 @@ runs:
       uses: actions/checkout@v3
       with:
         clean: false
+        fetch-depth: 0
+
+    - name: Merge into specified branch
+      run: |
+        git config user.name github-actions
+        git config user.email github-actions@github.com
+        git fetch origin ${{ inputs.merge-into }}
+        git checkout ${{ inputs.merge-into }}
+        git merge ${{ github.sha }} --no-ff -m "Merge ${{ github.ref }} into ${{ inputs.merge-into }} for build"
+      shell: bash
 
     - name: Repo Name
       id: repo-name
@@ -59,10 +73,8 @@ runs:
       with:
         credentials_json: ${{ inputs.google-key }}
 
-    # Setup gcloud CLI
     - uses: google-github-actions/setup-gcloud@v1
 
-    # Configure docker to use the gcloud command-line tool as a credential helper
     - run: gcloud auth configure-docker ${{ inputs.artifactory-url }}
       shell: bash
 
