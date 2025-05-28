@@ -1,0 +1,318 @@
+name: "Build with Kaniko"
+description: "Build a docker container using Kaniko in Kubernetes environment."
+inputs:
+  service-name:
+    description: "Service name"
+    required: true
+  service-folder:
+    description: "Service folder name (defaults to service-name if not provided)"
+    required: false
+  google-project:
+    description: "GCP project to use"
+    required: false
+    default: "tilda-dev-325721"
+  artifactory-url:
+    description: "Artifactory URL"
+    required: false
+    default: "us-central1-docker.pkg.dev"
+  github-token:
+    description: "GitHub token for repository access"
+    required: true
+  dockerfile-path:
+    description: "Path to Dockerfile relative to service folder"
+    required: false
+    default: "Dockerfile"
+  context-path:
+    description: "Build context path"
+    required: false
+    default: "/workspace/main"
+  namespace:
+    description: "Kubernetes namespace for Kaniko pod"
+    required: false
+    default: "gh-runners"
+  service-account:
+    description: "Kubernetes service account for Kaniko"
+    required: false
+    default: "kaniko-builder"
+  timeout-minutes:
+    description: "Timeout for the build in minutes"
+    required: false
+    default: "45"
+  memory-request:
+    description: "Memory request for Kaniko container"
+    required: false
+    default: "4Gi"
+  memory-limit:
+    description: "Memory limit for Kaniko container"
+    required: false
+    default: "12Gi"
+  cpu-request:
+    description: "CPU request for Kaniko container"
+    required: false
+    default: "1000m"
+  cpu-limit:
+    description: "CPU limit for Kaniko container"
+    required: false
+    default: "4"
+  ephemeral-storage-request:
+    description: "Ephemeral storage request"
+    required: false
+    default: "10Gi"
+  ephemeral-storage-limit:
+    description: "Ephemeral storage limit"
+    required: false
+    default: "10Gi"
+outputs:
+  image-tag:
+    description: "Built image tag"
+    value: ${{ steps.image-tag.outputs.image_tag }}
+  image-url:
+    description: "Full image URL"
+    value: ${{ steps.image-tag.outputs.image_url }}
+runs:
+  using: "composite"
+  steps:
+    - name: Set image tag and service info
+      id: image-tag
+      shell: bash
+      run: |
+        BRANCH_NAME=${GITHUB_REF#refs/heads/}
+        GIT_SHA_SHORT=${GITHUB_SHA:0:7}
+        IMAGE_TAG="${BRANCH_NAME}-${GIT_SHA_SHORT}"
+        SVC_NAME="${{ inputs.service-name }}"
+        SVC_FOLDER="${{ inputs.service-folder }}"
+
+        # Use service-name as folder if service-folder not provided
+        if [ -z "$SVC_FOLDER" ]; then
+          SVC_FOLDER="$SVC_NAME"
+        fi
+
+        IMAGE_URL="${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${SVC_NAME}:${IMAGE_TAG}"
+
+        echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "svc_name=${SVC_NAME}" >> $GITHUB_OUTPUT
+        echo "svc_folder=${SVC_FOLDER}" >> $GITHUB_OUTPUT
+        echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+        echo "image_url=${IMAGE_URL}" >> $GITHUB_OUTPUT
+
+        echo "Image tag: ${IMAGE_TAG}"
+        echo "Service name: ${SVC_NAME}"
+        echo "Service folder: ${SVC_FOLDER}"
+        echo "Branch name: ${BRANCH_NAME}"
+        echo "Image URL: ${IMAGE_URL}"
+
+    - name: Build with Kaniko
+      shell: bash
+      run: |
+        # Create Kaniko pod with git init container
+        cat > kaniko-build.yaml << EOF
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }}
+          namespace: ${{ inputs.namespace }}
+        spec:
+          serviceAccountName: ${{ inputs.service-account }}
+          restartPolicy: Never
+          initContainers:
+          - name: git-clone
+            image: bitnami/git:latest
+            command:
+              - sh
+              - -c
+              - |
+                echo "=== Git Clone Debug Info ==="
+                echo "BRANCH_NAME: \${BRANCH_NAME}"
+                echo "GITHUB_TOKEN: [REDACTED]"
+                echo "Workspace: ${{ inputs.context-path }}"
+                
+                echo "=== Git Clone Attempt ==="
+                echo "Cloning branch: \${BRANCH_NAME}"
+                
+                if [ -z "\${GITHUB_TOKEN}" ]; then
+                  echo "❌ GITHUB_TOKEN is empty"
+                  exit 1
+                fi
+                
+                if [ -z "\${BRANCH_NAME}" ]; then
+                  echo "❌ BRANCH_NAME is empty"
+                  exit 1
+                fi
+                
+                git clone --depth 1 --branch "\${BRANCH_NAME}" \
+                  "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+                  ${{ inputs.context-path }}
+                
+                if [ \$? -eq 0 ]; then
+                  echo "✅ Git clone successful"
+                else
+                  echo "❌ Git clone failed"
+                  exit 1
+                fi
+            env:
+              - name: GITHUB_TOKEN
+                value: "${{ inputs.github-token }}"
+              - name: BRANCH_NAME
+                value: "${{ steps.image-tag.outputs.branch_name }}"
+            volumeMounts:
+              - name: workspace
+                mountPath: /workspace
+          - name: debug-auth
+            image: google/cloud-sdk:alpine
+            command:
+              - sh
+              - -c
+              - |
+                echo "=== Workload Identity Debug ==="
+                echo "Service Account: \$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)/\$(cat /var/run/secrets/kubernetes.io/serviceaccount/serviceaccount/name 2>/dev/null || echo 'unknown')"
+                echo "Checking metadata server access..."
+                curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email || echo "Metadata server access failed"
+                echo "Attempting gcloud auth..."
+                gcloud auth list || echo "gcloud auth failed"
+                echo "Testing Artifact Registry access..."
+                gcloud auth print-access-token | head -c 20 && echo "..." || echo "Token generation failed"
+            volumeMounts:
+              - name: workspace
+                mountPath: /workspace
+          - name: setup-go-cache
+            image: golang:1.21-alpine
+            command:
+              - sh
+              - -c
+              - |
+                echo "=== Setting up Go cache ==="
+                echo "Creating cache directories..."
+                
+                # Create cache directories that match Dockerfile ENV vars
+                mkdir -p /go-cache/build-cache
+                mkdir -p /go-cache/mod
+                
+                # Set proper permissions (777 to ensure Kaniko can write)
+                chmod -R 777 /go-cache
+                
+                echo "✅ Go cache setup complete"
+                echo "Cache directories:"
+                ls -la /go-cache/
+                
+                # Show any existing cache content
+                echo "Existing cache content:"
+                du -sh /go-cache/* 2>/dev/null || echo "Cache is empty"
+            volumeMounts:
+              - name: workspace
+                mountPath: /workspace
+              - name: go-cache
+                mountPath: /go-cache
+          containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:latest
+            args:
+              - "--context=${{ inputs.context-path }}"
+              - "--dockerfile=${{ inputs.context-path }}/${{ steps.image-tag.outputs.svc_folder }}/${{ inputs.dockerfile-path }}"
+              - "--destination=${{ steps.image-tag.outputs.image_url }}"
+              - "--verbosity=info"
+              - "--single-snapshot"
+              # Pass Go cache environment variables to Docker build
+              - "--build-arg=GOCACHE=/go-cache/build-cache"
+              - "--build-arg=GOMODCACHE=/go-cache/mod"
+            env:
+              - name: GOCACHE
+                value: "/go-cache/build-cache"
+              - name: GOMODCACHE
+                value: "/go-cache/mod"
+            volumeMounts:
+              - name: workspace
+                mountPath: /workspace
+              - name: go-cache
+                mountPath: /go-cache
+            resources:
+              requests:
+                memory: "${{ inputs.memory-request }}"
+                cpu: "${{ inputs.cpu-request }}"
+                ephemeral-storage: "${{ inputs.ephemeral-storage-request }}"
+              limits:
+                memory: "${{ inputs.memory-limit }}"
+                cpu: "${{ inputs.cpu-limit }}"
+                ephemeral-storage: "${{ inputs.ephemeral-storage-limit }}"
+          volumes:
+          - name: workspace
+            emptyDir: {}
+          - name: go-cache
+            persistentVolumeClaim:
+              claimName: go-modules-cache
+        EOF
+
+        echo "=== Generated Kaniko Pod YAML ==="
+        cat kaniko-build.yaml
+
+        # Apply the pod
+        kubectl apply -f kaniko-build.yaml
+
+        # Wait for pod to be created
+        echo "Waiting for pod to be created..."
+        kubectl wait --for=condition=PodScheduled pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=60s || true
+
+        # Check pod status
+        echo "Pod status after creation:"
+        kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o wide || true
+
+        # Wait for init container to complete
+        echo "Waiting for git-clone init container to complete..."
+        kubectl wait --for=condition=Initialized pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=300s || true
+
+        # Show init container logs
+        echo "=== Git Clone Init Container Logs ==="
+        kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c git-clone || true
+
+        # Show Go cache setup logs
+        echo "=== Go Cache Setup Init Container Logs ==="
+        kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c setup-go-cache || true
+
+        # Wait for main container to be ready
+        echo "Waiting for Kaniko container to be ready..."
+        kubectl wait --for=condition=Ready pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=60s || true
+
+        # Monitor the Kaniko build with periodic status checks
+        echo "=== Kaniko Build Logs ==="
+        kubectl logs -f pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko || true
+
+        # Wait for the pod to complete (either Succeeded or Failed)
+        echo "Waiting for Kaniko build to complete..."
+        while true; do
+          POD_STATUS=$(kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+          echo "Current pod status: $POD_STATUS"
+          if [ "$POD_STATUS" = "Succeeded" ] || [ "$POD_STATUS" = "Failed" ]; then
+            break
+          fi
+          sleep 10
+        done
+
+        # Check final status
+        POD_STATUS=$(kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o jsonpath='{.status.phase}')
+        echo "Final pod status: $POD_STATUS"
+
+        # Show pod events for debugging
+        echo "=== Pod Events ==="
+        kubectl describe pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} | grep -A 20 "Events:" || true
+
+        if [ "$POD_STATUS" = "Succeeded" ]; then
+          echo "✅ Kaniko build completed successfully!"
+          echo "Built image: ${{ steps.image-tag.outputs.image_url }}"
+          echo "${{ steps.image-tag.outputs.image_url }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Show Go cache usage
+          echo "=== Go Cache Usage ==="
+          kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- du -sh /go-cache/ 2>/dev/null || echo "Could not check cache size"
+        else
+          echo "❌ Kaniko build failed with status: $POD_STATUS"
+          echo "=== Full Pod Description ==="
+          kubectl describe pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }}
+          echo "=== Final Container Logs ==="
+          kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --all-containers=true || true
+          exit 1
+        fi
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        kubectl delete pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --ignore-not-found=true
