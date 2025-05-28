@@ -54,14 +54,6 @@ inputs:
     description: "CPU limit for Kaniko container"
     required: false
     default: "4"
-  ephemeral-storage-request:
-    description: "Ephemeral storage request"
-    required: false
-    default: "10Gi"
-  ephemeral-storage-limit:
-    description: "Ephemeral storage limit"
-    required: false
-    default: "10Gi"
 outputs:
   image-tag:
     description: "Built image tag"
@@ -228,11 +220,11 @@ runs:
               requests:
                 memory: "${{ inputs.memory-request }}"
                 cpu: "${{ inputs.cpu-request }}"
-                ephemeral-storage: "${{ inputs.ephemeral-storage-request }}"
+                ephemeral-storage: "8Gi"
               limits:
                 memory: "${{ inputs.memory-limit }}"
                 cpu: "${{ inputs.cpu-limit }}"
-                ephemeral-storage: "${{ inputs.ephemeral-storage-limit }}"
+                ephemeral-storage: "8Gi"
           volumes:
           - name: workspace
             emptyDir: {}
