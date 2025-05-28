@@ -96,13 +96,17 @@ runs:
     - name: Build with Kaniko
       shell: bash
       run: |
-        # Create Kaniko pod with git init container
+        # Create Kaniko pod with git init container and per-service Go cache
         cat > kaniko-build.yaml << EOF
         apiVersion: v1
         kind: Pod
         metadata:
           name: kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }}
           namespace: ${{ inputs.namespace }}
+          labels:
+            app: kaniko-build
+            service: ${{ inputs.service-name }}
+            run-id: "${{ github.run_id }}"
         spec:
           serviceAccountName: ${{ inputs.service-account }}
           restartPolicy: Never
@@ -172,7 +176,7 @@ runs:
               - sh
               - -c
               - |
-                echo "=== Setting up Go cache ==="
+                echo "=== Setting up Go cache for service: ${{ inputs.service-name }} ==="
                 echo "Creating cache directories..."
                 
                 # Create cache directories that match Dockerfile ENV vars
@@ -182,13 +186,18 @@ runs:
                 # Set proper permissions (777 to ensure Kaniko can write)
                 chmod -R 777 /go-cache
                 
-                echo "✅ Go cache setup complete"
+                echo "✅ Go cache setup complete for ${{ inputs.service-name }}"
                 echo "Cache directories:"
                 ls -la /go-cache/
                 
                 # Show any existing cache content
-                echo "Existing cache content:"
+                echo "Existing cache content for ${{ inputs.service-name }}:"
                 du -sh /go-cache/* 2>/dev/null || echo "Cache is empty"
+                
+                # Show cache statistics
+                echo "=== Cache Statistics ==="
+                echo "Build cache entries: \$(find /go-cache/build-cache -type f 2>/dev/null | wc -l)"
+                echo "Module cache entries: \$(find /go-cache/mod -type d -name '*@*' 2>/dev/null | wc -l)"
             volumeMounts:
               - name: workspace
                 mountPath: /workspace
@@ -203,6 +212,9 @@ runs:
               - "--destination=${{ steps.image-tag.outputs.image_url }}"
               - "--verbosity=info"
               - "--single-snapshot"
+              - "--snapshot-mode=redo"
+              - "--use-new-run"
+              - "--compressed-caching=false"
               # Pass Go cache environment variables to Docker build
               - "--build-arg=GOCACHE=/go-cache/build-cache"
               - "--build-arg=GOMODCACHE=/go-cache/mod"
@@ -211,6 +223,8 @@ runs:
                 value: "/go-cache/build-cache"
               - name: GOMODCACHE
                 value: "/go-cache/mod"
+              - name: SERVICE_NAME
+                value: "${{ inputs.service-name }}"
             volumeMounts:
               - name: workspace
                 mountPath: /workspace
@@ -230,7 +244,7 @@ runs:
             emptyDir: {}
           - name: go-cache
             persistentVolumeClaim:
-              claimName: go-modules-cache
+              claimName: go-modules-cache-${{ inputs.service-name }}
         EOF
 
         echo "=== Generated Kaniko Pod YAML ==="
@@ -291,9 +305,10 @@ runs:
           echo "Built image: ${{ steps.image-tag.outputs.image_url }}"
           echo "${{ steps.image-tag.outputs.image_url }}" >> $GITHUB_STEP_SUMMARY
           
-          # Show Go cache usage
-          echo "=== Go Cache Usage ==="
+          # Show Go cache usage for this service
+          echo "=== Go Cache Usage for ${{ inputs.service-name }} ==="
           kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- du -sh /go-cache/ 2>/dev/null || echo "Could not check cache size"
+          kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- find /go-cache -type f | wc -l 2>/dev/null | xargs echo "Total cached files:" || true
         else
           echo "❌ Kaniko build failed with status: $POD_STATUS"
           echo "=== Full Pod Description ==="
