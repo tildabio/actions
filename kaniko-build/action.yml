@@ -183,6 +183,10 @@ runs:
                 mkdir -p /go-cache/build-cache
                 mkdir -p /go-cache/mod
                 
+                # Create Python cache directories as well (for services that need them)
+                mkdir -p /go-cache/python/pip
+                mkdir -p /go-cache/python/poetry
+                
                 # Set proper permissions (777 to ensure Kaniko can write)
                 chmod -R 777 /go-cache
                 
@@ -198,6 +202,8 @@ runs:
                 echo "=== Cache Statistics ==="
                 echo "Build cache entries: \$(find /go-cache/build-cache -type f 2>/dev/null | wc -l)"
                 echo "Module cache entries: \$(find /go-cache/mod -type d -name '*@*' 2>/dev/null | wc -l)"
+                echo "Python pip cache entries: \$(find /go-cache/python/pip -type f 2>/dev/null | wc -l)"
+                echo "Python poetry cache entries: \$(find /go-cache/python/poetry -type f 2>/dev/null | wc -l)"
             volumeMounts:
               - name: workspace
                 mountPath: /workspace
@@ -218,11 +224,10 @@ runs:
               # Pass Go cache environment variables to Docker build
               - "--build-arg=GOCACHE=/go-cache/build-cache"
               - "--build-arg=GOMODCACHE=/go-cache/mod"
+              # Pass Python cache environment variables to Docker build
+              - "--build-arg=PIP_CACHE_DIR=/go-cache/python/pip"
+              - "--build-arg=POETRY_CACHE_DIR=/go-cache/python/poetry"
             env:
-              - name: GOCACHE
-                value: "/go-cache/build-cache"
-              - name: GOMODCACHE
-                value: "/go-cache/mod"
               - name: SERVICE_NAME
                 value: "${{ inputs.service-name }}"
             volumeMounts:
@@ -309,6 +314,11 @@ runs:
           echo "=== Go Cache Usage for ${{ inputs.service-name }} ==="
           kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- du -sh /go-cache/ 2>/dev/null || echo "Could not check cache size"
           kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- find /go-cache -type f | wc -l 2>/dev/null | xargs echo "Total cached files:" || true
+          
+          # Show Python cache usage for this service (if applicable)
+          echo "=== Python Cache Usage for ${{ inputs.service-name }} ==="
+          kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- du -sh /go-cache/python/ 2>/dev/null || echo "No Python cache or could not check cache size"
+          kubectl exec pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko -- find /go-cache/python -type f | wc -l 2>/dev/null | xargs echo "Total Python cached files:" || true
         else
           echo "❌ Kaniko build failed with status: $POD_STATUS"
           echo "=== Full Pod Description ==="
