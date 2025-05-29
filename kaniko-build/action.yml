@@ -315,60 +315,6 @@ runs:
           echo "✅ Kaniko build completed successfully!"
           echo "Built image: ${{ steps.image-tag.outputs.image_url }}"
           echo "${{ steps.image-tag.outputs.image_url }}" >> $GITHUB_STEP_SUMMARY
-          
-          # Comprehensive cache reporting using a separate container
-          echo "=== Generating Comprehensive Cache Report ==="
-          cat > cache-report.yaml << EOF
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: cache-report-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }}
-          namespace: ${{ inputs.namespace }}
-        spec:
-          restartPolicy: Never
-          containers:
-          - name: cache-reporter
-            image: alpine:latest
-            command: ["/bin/sh", "-c"]
-            args:
-              - |
-                echo ""
-                echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║               COMPREHENSIVE CACHE REPORT                    ║"
-                echo "║                Service: ${{ inputs.service-name }}                               ║"
-                echo "╠══════════════════════════════════════════════════════════════╣"
-                echo "║ Total Cache Size: \$(du -sh /build-cache 2>/dev/null | cut -f1 || echo 'N/A')                              ║"
-                echo "╠══════════════════════════════════════════════════════════════╣"
-                echo "║ 🔨 Go Build Cache:    \$(find /build-cache/go/build-cache -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/go/build-cache 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 📦 Go Module Cache:   \$(find /build-cache/go/mod -type d -name '*@*' 2>/dev/null | wc -l | xargs printf '%4s') mods   \$(du -sh /build-cache/go/mod 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 🐍 Python Pip Cache:  \$(find /build-cache/python/pip -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/python/pip 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 📚 Python Poetry:     \$(find /build-cache/python/poetry -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/python/poetry 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 📋 APK Package Cache: \$(find /build-cache/apk -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/apk 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 📦 APT Package Cache: \$(find /build-cache/apt -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/apt 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ ⚡ CCCache (CGO):     \$(find /build-cache/ccache -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/ccache 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "║ 🛠️  Tools Cache:       \$(find /build-cache/tools -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/tools 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
-                echo "╚══════════════════════════════════════════════════════════════╝"
-                echo ""
-            volumeMounts:
-              - name: build-cache
-                mountPath: /build-cache
-          volumes:
-          - name: build-cache
-            persistentVolumeClaim:
-              claimName: comprehensive-build-cache-${{ inputs.service-name }}
-        EOF
-          
-          # Run cache report
-          kubectl apply -f cache-report.yaml
-          kubectl wait --for=condition=Ready pod/cache-report-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=30s || true
-          
-          # Wait for the pod to complete and get full logs
-          echo "Waiting for cache report to complete..."
-          kubectl wait --for=condition=ContainerReady pod/cache-report-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=30s || true
-          sleep 3
-          kubectl logs pod/cache-report-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} || echo "Cache report failed"
-          
-          kubectl delete pod cache-report-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --ignore-not-found=true
         else
           echo "❌ Kaniko build failed with status: $POD_STATUS"
           echo "=== Full Pod Description ==="
