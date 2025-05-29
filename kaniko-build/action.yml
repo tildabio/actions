@@ -41,19 +41,19 @@ inputs:
   memory-request:
     description: "Memory request for Kaniko container"
     required: false
-    default: "6Gi"
+    default: "8Gi"
   memory-limit:
     description: "Memory limit for Kaniko container"
     required: false
-    default: "16Gi"
+    default: "24Gi"
   cpu-request:
     description: "CPU request for Kaniko container"
     required: false
-    default: "2000m"
+    default: "4000m"
   cpu-limit:
     description: "CPU limit for Kaniko container"
     required: false
-    default: "6"
+    default: "12"
   enable-cache-registry:
     description: "Enable Kaniko registry-based layer caching"
     required: false
@@ -194,6 +194,7 @@ runs:
                 mkdir -p /build-cache/ccache
                 mkdir -p /build-cache/poetry-install
                 mkdir -p /build-cache/tools
+                mkdir -p /build-cache/apt
                 
                 # Set proper permissions (777 to ensure all caches can be written)
                 chmod -R 777 /build-cache
@@ -229,6 +230,7 @@ runs:
               - "--build-arg=POETRY_CACHE_DIR=/build-cache/python/poetry"
               - "--build-arg=POETRY_INSTALLER_CACHE_DIR=/build-cache/python/poetry-installer"
               - "--build-arg=APK_CACHE_DIR=/build-cache/apk"
+              - "--build-arg=APT_CACHE_DIR=/build-cache/apt"
               - "--build-arg=CCACHE_DIR=/build-cache/ccache"
               - "--build-arg=TOOLS_CACHE_DIR=/build-cache/tools"
             env:
@@ -342,6 +344,7 @@ runs:
                 echo "║ 🐍 Python Pip Cache:  \$(find /build-cache/python/pip -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/python/pip 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
                 echo "║ 📚 Python Poetry:     \$(find /build-cache/python/poetry -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/python/poetry 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
                 echo "║ 📋 APK Package Cache: \$(find /build-cache/apk -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/apk 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
+                echo "║ 📦 APT Package Cache: \$(find /build-cache/apt -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/apt 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
                 echo "║ ⚡ CCCache (CGO):     \$(find /build-cache/ccache -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/ccache 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
                 echo "║ 🛠️  Tools Cache:       \$(find /build-cache/tools -type f 2>/dev/null | wc -l | xargs printf '%4s') files  \$(du -sh /build-cache/tools 2>/dev/null | cut -f1 | xargs printf '%8s') ║"
                 echo "╚══════════════════════════════════════════════════════════════╝"
