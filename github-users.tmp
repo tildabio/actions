@@ -1,0 +1,52 @@
+aaburaed, 104334134880089040778
+akhilmekala-7, 101516452947518501136
+AlekhyaBolineedi, 108726521619282634406
+arzatskis, 117746374527400977559
+asatish, 100781227816006927200
+avdkishore, 118121924639492619889
+bandarupalli, 116471631639647051188
+code-R, 104319066744219366905
+harry43, 101160808186762154164
+Harsh-Tilda, 103683547694802981829
+henrykuzmick, 113316079042716365364
+janavsharma, 118275540197830851239
+Kazerian, 104359268365476978586
+max-schultz, 100931662184884363088
+mmukkama, 116129276267851207636
+mukesh-shinde, 117726844715437821206
+mvelamatt, 118039247909767038194
+nkommuri, 101742600966412231683
+ojasgo, 108532106195504630280
+Omkartilda, 112012746096829644221
+poojalodhi, 112167383418467827095
+pralim, 110532471898624745083
+pranitmahajan, 101610467228733894550
+ramyala, 116803467601431608897
+sbadiger, 110484033424324678894
+Shashank-Agrawal12, 111197321229422097387
+sureshboddapati, 100249535199402807853
+TadasValaitiz, 107564525216259906651
+taniyag10, 108009221623829599817
+taylorfutral, 101630954969035638557
+vishal23karedla, 104516290252315327494
+
+
+,
+              "docsvc": "${{ needs.docsvc.result }}",
+              "enrollsvc": "${{ needs.enrollsvc.result }}",
+              "execsvc": "${{ needs.execsvc.result }}",
+              "finsvc": "${{ needs.finsvc.result }}",
+              "migrations": "${{ needs.migrations.result }}",
+              "notifsvc": "${{ needs.notifsvc.result }}",
+              "patientsvc": "${{ needs.patientsvc.result }}",
+              "regsvc": "${{ needs.regsvc.result }}",
+              "schedsvc": "${{ needs.schedsvc.result }}",
+              "studiosvc": "${{ needs.studiosvc.result }}",
+              "swaggersvc": "${{ needs.swaggersvc.result }}",
+              "synthea": "${{ needs.synthea.result }}",
+              "tusker": "${{ needs.tusker.result }}",
+              "upgrade": "${{ needs.upgrade.result }}",
+              "advpsvc": "${{ needs.advpsvc.result }}",
+              "studioaisvc": "${{ needs.studioaisvc.result }}",
+              "virtual-assistant": "${{ needs.virtual-assistant.result }}",
+              "search-api": "${{ needs.search-api.result }}"

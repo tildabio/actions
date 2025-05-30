@@ -1,0 +1,304 @@
+name: "Google Chat Notification"
+description: "Send failure notifications to Google Chat with job status details"
+inputs:
+  webhook-url:
+    description: "Google Chat webhook URL"
+    required: false
+    default: "https://chat.googleapis.com/v1/spaces/AAQA5CRSZ7M/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=-BfxLJ1U0goSnuairYxiVb_yYadCtyQ2BU-ZX9sdzOc"
+  user-to-mention:
+    description: "GitHub username to mention in the notification"
+    required: true
+    default: ${{ github.actor }}
+  workflow-name:
+    description: "Name of the workflow"
+    required: false
+    default: ${{ github.workflow }}
+  job-results:
+    description: 'JSON string of job results in format: {"job1": "success", "job2": "failure"}'
+    required: true
+  branch-name:
+    description: "Branch name"
+    required: false
+    default: ${{ github.ref_name }}
+  commit-sha:
+    description: "Commit SHA"
+    required: false
+    default: ${{ github.sha }}
+  run-url:
+    description: "GitHub Actions run URL"
+    required: false
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  only-on-failure:
+    description: "Only send notification if there are failures"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Parse job results and send notification
+      shell: bash
+      run: |
+        echo "=== Google Chat Notification Action ==="
+        echo "Webhook URL: [REDACTED]"
+        echo "User to mention: ${{ inputs.user-to-mention }}"
+        echo "Workflow: ${{ inputs.workflow-name }}"
+        echo "Branch: ${{ inputs.branch-name }}"
+        echo "Commit: ${{ inputs.commit-sha }}"
+
+        # Parse job results from JSON input
+        JOB_RESULTS='${{ inputs.job-results }}'
+        echo "Job results input: $JOB_RESULTS"
+
+        # Extract failed jobs
+        FAILED_JOBS=""
+        SUCCESS_JOBS=""
+        TOTAL_JOBS=0
+        FAILED_COUNT=0
+
+        # Parse the JSON using a more robust method
+        echo "$JOB_RESULTS" | grep -o '"[^"]*"[[:space:]]*:[[:space:]]*"[^"]*"' | while IFS= read -r line; do
+          if [[ $line =~ \"([^\"]+)\":[[:space:]]*\"([^\"]+)\" ]]; then
+            job_name="${BASH_REMATCH[1]}"
+            job_result="${BASH_REMATCH[2]}"
+            echo "Processing: $job_name = $job_result"
+            
+            if [[ "$job_result" == "failure" ]]; then
+              echo "FAILED:$job_name" >> /tmp/failed_jobs
+            elif [[ "$job_result" == "success" ]]; then
+              echo "SUCCESS:$job_name" >> /tmp/success_jobs
+            fi
+          fi
+        done
+
+        # Read the results back
+        FAILED_COUNT=0
+        SUCCESS_COUNT=0
+        FAILED_JOBS_LIST=""
+        SUCCESS_JOBS_LIST=""
+
+        if [ -f /tmp/failed_jobs ]; then
+          while IFS= read -r line; do
+            job_name="${line#FAILED:}"
+            FAILED_JOBS_LIST="${FAILED_JOBS_LIST}• ${job_name}\\n"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+          done < /tmp/failed_jobs
+          rm /tmp/failed_jobs
+        fi
+
+        if [ -f /tmp/success_jobs ]; then
+          while IFS= read -r line; do
+            job_name="${line#SUCCESS:}"
+            SUCCESS_JOBS_LIST="${SUCCESS_JOBS_LIST}• ${job_name}\\n"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+          done < /tmp/success_jobs
+          rm /tmp/success_jobs
+        fi
+
+        TOTAL_JOBS=$((FAILED_COUNT + SUCCESS_COUNT))
+
+        echo "Total jobs: $TOTAL_JOBS"
+        echo "Failed jobs: $FAILED_COUNT"
+        echo "Success jobs: $SUCCESS_COUNT"
+
+        # Check if we should send notification
+        if [[ "${{ inputs.only-on-failure }}" == "true" && $FAILED_COUNT -eq 0 ]]; then
+          echo "✅ No failures detected, skipping notification"
+          exit 0
+        fi
+
+        # Determine message type and emoji
+        if [[ $FAILED_COUNT -eq 0 ]]; then
+          STATUS_EMOJI="✅"
+          STATUS_TEXT="All Builds Successful"
+        elif [[ $FAILED_COUNT -eq $TOTAL_JOBS ]]; then
+          STATUS_EMOJI="🚨"
+          STATUS_TEXT="All Builds Failed"
+        else
+          STATUS_EMOJI="⚠️"
+          STATUS_TEXT="Partial Build Failures"
+        fi
+
+        # GitHub username to Google Chat User ID mapping
+        GITHUB_USERNAME="${{ inputs.user-to-mention }}"
+
+        # Hardcoded lookup table for GitHub usernames to Google Chat User IDs
+        declare -A USER_ID_MAP
+        USER_ID_MAP["aaburaed"]="104334134880089040778"
+        USER_ID_MAP["akhilmekala-7"]="101516452947518501136"
+        USER_ID_MAP["AlekhyaBolineedi"]="108726521619282634406"
+        USER_ID_MAP["arzatskis"]="117746374527400977559"
+        USER_ID_MAP["asatish"]="100781227816006927200"
+        USER_ID_MAP["avdkishore"]="118121924639492619889"
+        USER_ID_MAP["bandarupalli"]="116471631639647051188"
+        USER_ID_MAP["code-R"]="104319066744219366905"
+        USER_ID_MAP["harry43"]="101160808186762154164"
+        USER_ID_MAP["Harsh-Tilda"]="103683547694802981829"
+        USER_ID_MAP["henrykuzmick"]="113316079042716365364"
+        USER_ID_MAP["janavsharma"]="118275540197830851239"
+        USER_ID_MAP["Kazerian"]="104359268365476978586"
+        USER_ID_MAP["max-schultz"]="100931662184884363088"
+        USER_ID_MAP["mmukkama"]="116129276267851207636"
+        USER_ID_MAP["mukesh-shinde"]="117726844715437821206"
+        USER_ID_MAP["mvelamatt"]="118039247909767038194"
+        USER_ID_MAP["nkommuri"]="101742600966412231683"
+        USER_ID_MAP["ojasgo"]="108532106195504630280"
+        USER_ID_MAP["Omkartilda"]="112012746096829644221"
+        USER_ID_MAP["poojalodhi"]="112167383418467827095"
+        USER_ID_MAP["pralim"]="110532471898624745083"
+        USER_ID_MAP["pranitmahajan"]="101610467228733894550"
+        USER_ID_MAP["ramyala"]="116803467601431608897"
+        USER_ID_MAP["sbadiger"]="110484033424324678894"
+        USER_ID_MAP["Shashank-Agrawal12"]="111197321229422097387"
+        USER_ID_MAP["sureshboddapati"]="100249535199402807853"
+        USER_ID_MAP["TadasValaitiz"]="107564525216259906651"
+        USER_ID_MAP["taniyag10"]="108009221623829599817"
+        USER_ID_MAP["taylorfutral"]="101630954969035638557"
+        USER_ID_MAP["vishal23karedla"]="104516290252315327494"
+
+        # Look up the Google Chat User ID for the GitHub username
+        GOOGLE_CHAT_USER_ID="${USER_ID_MAP[$GITHUB_USERNAME]}"
+
+        echo "=== User Mention Debug ==="
+        echo "GitHub Username: '$GITHUB_USERNAME'"
+        echo "Looked up User ID: '$GOOGLE_CHAT_USER_ID'"
+
+        if [[ -n "$GOOGLE_CHAT_USER_ID" ]]; then
+          # Create proper Google Chat mention
+          USER_MENTION="<users/$GOOGLE_CHAT_USER_ID>"
+          USER_NOTIFICATION="$USER_MENTION Build notification"
+          echo "✅ Found Google Chat User ID for GitHub user '$GITHUB_USERNAME': $GOOGLE_CHAT_USER_ID"
+          echo "✅ Created mention: '$USER_MENTION'"
+          echo "✅ Full notification text: '$USER_NOTIFICATION'"
+        else
+          # Fallback if user not found in mapping
+          USER_MENTION="@$GITHUB_USERNAME"
+          USER_NOTIFICATION="🔔 Build notification for GitHub user: $GITHUB_USERNAME (user not found in mention mapping)"
+          echo "⚠️ GitHub user '$GITHUB_USERNAME' not found in user mapping, using fallback mention"
+        fi
+
+        # Debug: Print the exact text that will be used
+        echo "=== Final notification text that will be sent ==="
+        echo "$USER_NOTIFICATION"
+
+        # Build sections array step by step
+        SECTIONS_ARRAY=""
+
+        # Add user notification section at the top  
+        MENTION_SECTION='{
+          "widgets": [{
+            "textParagraph": {
+              "text": "'$USER_NOTIFICATION'"
+            }
+          }]
+        }'
+        SECTIONS_ARRAY="$MENTION_SECTION"
+
+        # Add failed jobs section if any
+        if [[ $FAILED_COUNT -gt 0 ]]; then
+          # Remove trailing \\n and escape for JSON
+          CLEAN_FAILED_JOBS=$(echo -e "$FAILED_JOBS_LIST" | sed 's/\\n$//' | sed 's/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')
+          
+          FAILED_SECTION='{
+            "header": "❌ Failed Jobs ('$FAILED_COUNT')",
+            "widgets": [{
+              "textParagraph": {
+                "text": "'$CLEAN_FAILED_JOBS'"
+              }
+            }]
+          }'
+          
+          SECTIONS_ARRAY="$SECTIONS_ARRAY,$FAILED_SECTION"
+        fi
+
+        # Add success jobs section if configured to show all results
+        if [[ "${{ inputs.only-on-failure }}" != "true" && $SUCCESS_COUNT -gt 0 ]]; then
+          CLEAN_SUCCESS_JOBS=$(echo -e "$SUCCESS_JOBS_LIST" | sed 's/\\n$//' | sed 's/$/\\n/g' | tr -d '\n' | sed 's/\\n$//')
+          
+          SUCCESS_SECTION='{
+            "header": "✅ Successful Jobs ('$SUCCESS_COUNT')",
+            "widgets": [{
+              "textParagraph": {
+                "text": "'$CLEAN_SUCCESS_JOBS'"
+              }
+            }]
+          }'
+          
+          SECTIONS_ARRAY="$SECTIONS_ARRAY,$SUCCESS_SECTION"
+        fi
+
+        # Add build details section
+        DETAILS_SECTION='{
+          "header": "📋 Build Details",
+          "widgets": [{
+            "keyValue": {
+              "topLabel": "Workflow",
+              "content": "${{ inputs.workflow-name }}"
+            }
+          }, {
+            "keyValue": {
+              "topLabel": "Branch", 
+              "content": "${{ inputs.branch-name }}"
+            }
+          }, {
+            "keyValue": {
+              "topLabel": "Commit",
+              "content": "${{ inputs.commit-sha }}"
+            }
+          }, {
+            "buttons": [{
+              "textButton": {
+                "text": "View Workflow Run",
+                "onClick": {
+                  "openLink": {
+                    "url": "${{ inputs.run-url }}"
+                  }
+                }
+              }
+            }]
+          }]
+        }'
+
+        SECTIONS_ARRAY="$SECTIONS_ARRAY,$DETAILS_SECTION"
+
+        # Create the complete Google Chat message
+        # Include the user mention in the main text field for better visibility
+        MESSAGE='{
+          "text": "'$USER_MENTION' '$STATUS_EMOJI' '$STATUS_TEXT' - ${{ inputs.workflow-name }}",
+          "cards": [{
+            "header": {
+              "title": "'$STATUS_EMOJI' '$STATUS_TEXT'",
+              "subtitle": "Build status for workflow: ${{ inputs.workflow-name }}"
+            },
+            "sections": ['$SECTIONS_ARRAY']
+          }]
+        }'
+
+        echo "=== Generated Google Chat Message ==="
+        echo "$MESSAGE" | jq '.' 2>/dev/null || echo "$MESSAGE"
+
+        # Send the notification
+        echo "=== Sending notification to Google Chat ==="
+        RESPONSE=$(curl -s -w "%{http_code}" -X POST \
+          -H "Content-Type: application/json" \
+          -d "$MESSAGE" \
+          "${{ inputs.webhook-url }}")
+
+        HTTP_CODE="${RESPONSE: -3}"
+        RESPONSE_BODY="${RESPONSE%???}"
+
+        echo "HTTP Response Code: $HTTP_CODE"
+        echo "Response Body: $RESPONSE_BODY"
+
+        if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+          echo "✅ Google Chat notification sent successfully!"
+          echo ""
+          echo "📝 Note: To enable clickable user mentions, you would need to:"
+          echo "   1. Get the Google User ID (numeric) for $GITHUB_USERNAME using Google People API"
+          echo "   2. Replace the notification text with: <users/USER_ID>"
+          echo "   3. This requires additional API setup and authentication"
+        else
+          echo "❌ Failed to send Google Chat notification"
+          echo "Response: $RESPONSE_BODY"
+          exit 1
+        fi
