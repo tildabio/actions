@@ -151,36 +151,12 @@ runs:
                 fi
                 
                 echo "=== Git Clone Attempt ==="
+                echo "Cloning branch: \${BRANCH_NAME}"
                 
-                # Different clone strategies for push vs PR events
-                if [ "${{ github.event_name }}" = "pull_request" ]; then
-                  echo "Pull request event - cloning and checking out PR head: \${BRANCH_NAME}"
-                  
-                  # Clone the repository first
-                  git clone --depth 1 \
-                    "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
-                    ${{ inputs.context-path }}
-                  
-                  cd ${{ inputs.context-path }}
-                  
-                  # For PRs, fetch the pull request ref directly
-                  git fetch origin "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/\${BRANCH_NAME}" || {
-                    echo "❌ Failed to fetch PR head: ${{ github.event.pull_request.number }}"
-                    exit 1
-                  }
-                  
-                  git checkout "\${BRANCH_NAME}" || {
-                    echo "❌ Failed to checkout PR head branch: \${BRANCH_NAME}"
-                    exit 1
-                  }
-                else
-                  echo "Push event - cloning branch: \${BRANCH_NAME}"
-                  
-                  # For push events, clone the specific branch directly
-                  git clone --depth 1 --branch "\${BRANCH_NAME}" \
-                    "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
-                    ${{ inputs.context-path }}
-                fi
+                # Clone only the specific branch directly
+                git clone --depth 1 --single-branch --branch "\${BRANCH_NAME}" \
+                  "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+                  ${{ inputs.context-path }}
                 
                 if [ \$? -eq 0 ]; then
                   echo "✅ Git clone successful"
