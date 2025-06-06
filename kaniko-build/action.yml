@@ -72,28 +72,19 @@ runs:
       id: image-tag
       shell: bash
       run: |
-        # Robust branch name detection for both push and PR events
+        # Different branch detection for push vs PR events
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           # For pull requests, use the source branch name
           BRANCH_NAME="${{ github.head_ref }}"
           echo "Pull request detected - using head ref: $BRANCH_NAME"
         else
-          # For push events, use the target branch name
-          BRANCH_NAME="${{ github.ref_name }}"
-          echo "Push event detected - using ref name: $BRANCH_NAME"
-        fi
-
-        # Fallback: if branch name is still empty, extract from GITHUB_REF
-        if [ -z "$BRANCH_NAME" ]; then
+          # For push events, extract from GITHUB_REF
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          echo "Fallback - extracted from GITHUB_REF: $BRANCH_NAME"
+          echo "Push event detected - using: $BRANCH_NAME"
         fi
-
-        # Replace slashes with dashes for Docker tag compatibility
-        BRANCH_NAME_SAFE=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
 
         GIT_SHA_SHORT=${GITHUB_SHA:0:7}
-        IMAGE_TAG="${BRANCH_NAME_SAFE}-${GIT_SHA_SHORT}"
+        IMAGE_TAG="${BRANCH_NAME}-${GIT_SHA_SHORT}"
         SVC_NAME="${{ inputs.service-name }}"
         SVC_FOLDER="${{ inputs.service-folder }}"
 
@@ -108,16 +99,12 @@ runs:
         echo "svc_name=${SVC_NAME}" >> $GITHUB_OUTPUT
         echo "svc_folder=${SVC_FOLDER}" >> $GITHUB_OUTPUT
         echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
-        echo "branch_name_safe=${BRANCH_NAME_SAFE}" >> $GITHUB_OUTPUT
         echo "image_url=${IMAGE_URL}" >> $GITHUB_OUTPUT
 
-        echo "=== Branch Detection Results ==="
-        echo "Event type: ${{ github.event_name }}"
-        echo "Original branch name: ${BRANCH_NAME}"
-        echo "Safe branch name: ${BRANCH_NAME_SAFE}"
         echo "Image tag: ${IMAGE_TAG}"
         echo "Service name: ${SVC_NAME}"
         echo "Service folder: ${SVC_FOLDER}"
+        echo "Branch name: ${BRANCH_NAME}"
         echo "Image URL: ${IMAGE_URL}"
 
     - name: Build with Kaniko
@@ -148,16 +135,17 @@ runs:
               - |
                 echo "=== Git Clone Debug Info ==="
                 echo "Event type: ${{ github.event_name }}"
-                echo "BRANCH_NAME: ${BRANCH_NAME}"
+                echo "BRANCH_NAME: \${BRANCH_NAME}"
                 echo "GITHUB_TOKEN: [REDACTED]"
                 echo "Workspace: ${{ inputs.context-path }}"
                 
-                if [ -z "${GITHUB_TOKEN}" ]; then
+                if [ -z "\${GITHUB_TOKEN}" ]; then
                   echo "❌ GITHUB_TOKEN is empty"
                   exit 1
                 fi
+
                 
-                if [ -z "${BRANCH_NAME}" ]; then
+                if [ -z "\${BRANCH_NAME}" ]; then
                   echo "❌ BRANCH_NAME is empty"
                   exit 1
                 fi
@@ -166,39 +154,39 @@ runs:
                 
                 # Different clone strategies for push vs PR events
                 if [ "${{ github.event_name }}" = "pull_request" ]; then
-                  echo "Pull request event - cloning PR head branch: ${BRANCH_NAME}"
+                  echo "Pull request event - cloning and checking out PR head: \${BRANCH_NAME}"
                   
-                  # Clone the repository and checkout the PR head
+                  # Clone the repository first
                   git clone --depth 1 \
-                    "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+                    "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
                     ${{ inputs.context-path }}
                   
                   cd ${{ inputs.context-path }}
                   
-                  # Fetch the PR head and checkout
-                  git fetch origin "+refs/heads/${BRANCH_NAME}:refs/remotes/origin/${BRANCH_NAME}" || {
-                    echo "❌ Failed to fetch PR head branch: ${BRANCH_NAME}"
+                  # For PRs, fetch the pull request ref directly
+                  git fetch origin "+refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/\${BRANCH_NAME}" || {
+                    echo "❌ Failed to fetch PR head: ${{ github.event.pull_request.number }}"
                     exit 1
                   }
                   
-                  git checkout "${BRANCH_NAME}" || {
-                    echo "❌ Failed to checkout PR head branch: ${BRANCH_NAME}"
+                  git checkout "\${BRANCH_NAME}" || {
+                    echo "❌ Failed to checkout PR head branch: \${BRANCH_NAME}"
                     exit 1
                   }
                 else
-                  echo "Push event - cloning branch: ${BRANCH_NAME}"
+                  echo "Push event - cloning branch: \${BRANCH_NAME}"
                   
-                  # For push events, clone the specific branch
-                  git clone --depth 1 --branch "${BRANCH_NAME}" \
-                    "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+                  # For push events, clone the specific branch directly
+                  git clone --depth 1 --branch "\${BRANCH_NAME}" \
+                    "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
                     ${{ inputs.context-path }}
                 fi
                 
-                if [ $? -eq 0 ]; then
+                if [ \$? -eq 0 ]; then
                   echo "✅ Git clone successful"
                   cd ${{ inputs.context-path }}
-                  echo "Current commit: $(git rev-parse HEAD)"
-                  echo "Current branch: $(git branch --show-current || echo 'detached')"
+                  echo "Current commit: \$(git rev-parse HEAD)"
+                  echo "Current branch: \$(git branch --show-current || echo 'detached')"
                 else
                   echo "❌ Git clone failed"
                   exit 1
@@ -376,8 +364,8 @@ runs:
           exit 1
         fi
 
-    - name: Cleanup
-      if: always()
-      shell: bash
-      run: |
-        kubectl delete pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --ignore-not-found=true
+    # - name: Cleanup
+    #   if: always()
+    #   shell: bash
+    #   run: |
+    #     kubectl delete pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --ignore-not-found=true
