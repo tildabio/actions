@@ -72,43 +72,16 @@ runs:
       id: image-tag
       shell: bash
       run: |
-        echo "=== Image Tag Detection Debug ==="
-        echo "Event name: ${{ github.event_name }}"
-        echo "GitHub ref: ${{ github.ref }}"
-        echo "GitHub SHA: ${{ github.sha }}"
-
         # Different detection for push vs PR events vs tag events
         if [ "${{ github.event_name }}" = "pull_request" ]; then
-          # For pull requests, use the source branch name
           BRANCH_NAME="${{ github.head_ref }}"
-          echo "Pull request detected - using head ref: $BRANCH_NAME"
           IMAGE_TAG_BASE="$BRANCH_NAME"
-          REF_TYPE="branch"
         elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-          # For tag pushes, use the tag name
           TAG_NAME=${GITHUB_REF#refs/tags/}
-          echo "Tag push detected - using tag: $TAG_NAME"
           IMAGE_TAG_BASE="$TAG_NAME"
-          REF_TYPE="tag"
-          
-          # Additional validation for tag format
-          if [ -z "$TAG_NAME" ]; then
-            echo "❌ Tag name is empty after extraction"
-            exit 1
-          fi
-          echo "✅ Tag name extracted successfully: $TAG_NAME"
         else
-          # For branch pushes, extract from GITHUB_REF
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          echo "Branch push detected - using: $BRANCH_NAME"
           IMAGE_TAG_BASE="$BRANCH_NAME"
-          REF_TYPE="branch"
-        fi
-
-        # Validate IMAGE_TAG_BASE
-        if [ -z "$IMAGE_TAG_BASE" ]; then
-          echo "❌ IMAGE_TAG_BASE is empty"
-          exit 1
         fi
 
         GIT_SHA_SHORT=${GITHUB_SHA:0:7}
@@ -116,34 +89,21 @@ runs:
         SVC_NAME="${{ inputs.service-name }}"
         SVC_FOLDER="${{ inputs.service-folder }}"
 
-        # Use service-name as folder if service-folder not provided
         if [ -z "$SVC_FOLDER" ]; then
           SVC_FOLDER="$SVC_NAME"
         fi
 
         IMAGE_URL="${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${SVC_NAME}:${IMAGE_TAG}"
 
-        # Output all variables
         echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
         echo "svc_name=${SVC_NAME}" >> $GITHUB_OUTPUT
         echo "svc_folder=${SVC_FOLDER}" >> $GITHUB_OUTPUT
         echo "branch_name=${IMAGE_TAG_BASE}" >> $GITHUB_OUTPUT
         echo "image_url=${IMAGE_URL}" >> $GITHUB_OUTPUT
-        echo "ref_type=${REF_TYPE}" >> $GITHUB_OUTPUT
-
-        echo "=== Final Values ==="
-        echo "Reference type: ${REF_TYPE}"
-        echo "Image tag: ${IMAGE_TAG}"
-        echo "Service name: ${SVC_NAME}"
-        echo "Service folder: ${SVC_FOLDER}"
-        echo "Reference name (branch/tag): ${IMAGE_TAG_BASE}"
-        echo "Image URL: ${IMAGE_URL}"
-        echo "Git SHA short: ${GIT_SHA_SHORT}"
 
     - name: Build with Kaniko
       shell: bash
       run: |
-        # Create Kaniko pod with git init container and comprehensive caching
         cat > kaniko-build.yaml << EOF
         apiVersion: v1
         kind: Pod
@@ -166,105 +126,22 @@ runs:
               - sh
               - -c
               - |
-                echo "=== Git Clone Debug Info ==="
-                echo "Event type: ${{ github.event_name }}"
-                echo "GITHUB_REF: ${{ github.ref }}"
-                echo "REF_NAME: \${REF_NAME}"
-                echo "GITHUB_TOKEN: [REDACTED]"
-                echo "Workspace: ${{ inputs.context-path }}"
-                
-                if [ -z "\${GITHUB_TOKEN}" ]; then
-                  echo "❌ GITHUB_TOKEN is empty"
-                  exit 1
-                fi
-
-                if [ -z "\${REF_NAME}" ]; then
-                  echo "❌ REF_NAME is empty"
+                if [ -z "\${GITHUB_TOKEN}" ] || [ -z "\${REF_NAME}" ]; then
+                  echo "❌ Missing required environment variables"
                   exit 1
                 fi
                 
-                echo "=== Git Clone Attempt ==="
-                
-                # Different approach for tags vs branches for reliability
-                if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-                  echo "=== Tag Workflow Detected ==="
-                  echo "Cloning full repository for tag: \${REF_NAME}"
-                  
-                  # Clone the repository
-                  git clone "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
-                    ${{ inputs.context-path }}
-                  
-                  cd ${{ inputs.context-path }}
-                  
-                  # Ensure all tags are available
-                  echo "Fetching all tags..."
-                  git fetch --tags
-                  
-                  # List available tags for debugging
-                  echo "Available tags:"
-                  git tag -l | head -10
-                  
-                  # Verify the tag exists
-                  if git tag -l | grep -q "^\${REF_NAME}$"; then
-                    echo "✅ Tag \${REF_NAME} found"
-                  else
-                    echo "❌ Tag \${REF_NAME} not found"
-                    echo "Available tags:"
-                    git tag -l
-                    exit 1
-                  fi
-                  
-                  # Checkout the specific tag
-                  echo "Checking out tag: \${REF_NAME}"
-                  git checkout "tags/\${REF_NAME}"
-                  
-                  if [ \$? -eq 0 ]; then
-                    echo "✅ Tag checkout successful"
-                  else
-                    echo "❌ Tag checkout failed, trying alternative approach..."
-                    git checkout "\${REF_NAME}"
-                    if [ \$? -eq 0 ]; then
-                      echo "✅ Tag checkout successful with alternative approach"
-                    else
-                      echo "❌ Tag checkout failed completely"
-                      exit 1
-                    fi
-                  fi
-                  
-                else
-                  echo "=== Branch Workflow Detected ==="
-                  echo "Cloning branch with depth 1: \${REF_NAME}"
-                  # For branches, use optimized shallow clone
-                  git clone --depth 1 --branch "\${REF_NAME}" \
-                    "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
-                    ${{ inputs.context-path }}
-                  cd ${{ inputs.context-path }}
-                fi
-                
-                if [ \$? -eq 0 ]; then
-                  echo "✅ Git clone successful"
-                  echo "Current commit: \$(git rev-parse HEAD)"
-                  echo "Current HEAD: \$(git describe --always --tags || echo 'no tags')"
-                  echo "Current branch/tag: \$(git branch --show-current || git describe --tags --exact-match 2>/dev/null || echo 'detached HEAD')"
-                  
-                  # Additional verification for tags
-                  if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-                    echo "=== Tag Verification ==="
-                    echo "Expected tag: \${REF_NAME}"
-                    CURRENT_TAG=\$(git describe --tags --exact-match 2>/dev/null || echo "no exact tag match")
-                    echo "Current tag: \${CURRENT_TAG}"
-                    
-                    if [ "\${CURRENT_TAG}" = "\${REF_NAME}" ]; then
-                      echo "✅ Tag verification successful"
-                    else
-                      echo "⚠️  Tag verification warning: expected \${REF_NAME}, got \${CURRENT_TAG}"
-                      # Don't fail here, as the checkout was successful
-                    fi
-                  fi
-                else
-                  echo "❌ Git clone failed"
-                  exit 1
-                fi
+                case "${{ github.ref }}" in
+                  refs/tags/*)
+                    git clone "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" ${{ inputs.context-path }}
+                    cd ${{ inputs.context-path }}
+                    git fetch --tags
+                    git checkout "tags/\${REF_NAME}" || git checkout "\${REF_NAME}"
+                    ;;
+                  *)
+                    git clone --depth 1 --branch "\${REF_NAME}" "https://x-access-token:\${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" ${{ inputs.context-path }}
+                    ;;
+                esac
             env:
               - name: GITHUB_TOKEN
                 value: "${{ inputs.github-token }}"
@@ -273,66 +150,17 @@ runs:
             volumeMounts:
               - name: workspace
                 mountPath: /workspace
-          - name: setup-comprehensive-cache
-            image: golang:1.21-alpine
-            command:
-              - sh
-              - -c
-              - |
-                echo "=== Setting up comprehensive cache for service: ${{ inputs.service-name }} ==="
-                
-                # Create all cache directories individually (more reliable)
-                mkdir -p /build-cache/go/build-cache
-                mkdir -p /build-cache/go/mod
-                mkdir -p /build-cache/python/pip
-                mkdir -p /build-cache/python/poetry
-                mkdir -p /build-cache/python/poetry-installer
-                mkdir -p /build-cache/apk
-                mkdir -p /build-cache/ccache
-                mkdir -p /build-cache/poetry-install
-                mkdir -p /build-cache/tools
-                mkdir -p /build-cache/apt
-                
-                # Set proper permissions (777 to ensure all caches can be written)
-                chmod -R 777 /build-cache
-                
-                echo "✅ Comprehensive cache setup complete for ${{ inputs.service-name }}"
-                
-                # Show cache status
-                echo "=== Cache Status ==="
-                du -sh /build-cache/* 2>/dev/null | head -10 || echo "Caches are empty"
-            volumeMounts:
-              - name: workspace
-                mountPath: /workspace
-              - name: build-cache
-                mountPath: /build-cache
-          - name: debug-workspace
+          - name: setup-cache
             image: alpine:latest
             command:
               - sh
               - -c
               - |
-                echo "=== Debug: Workspace Structure for ${{ inputs.service-name }} ==="
-                echo "Context path: ${{ inputs.context-path }}"
-                echo "Service folder: ${{ steps.image-tag.outputs.svc_folder }}"
-                echo "Dockerfile path: ${{ inputs.dockerfile-path }}"
-                
-                echo "=== Full workspace contents ==="
-                find ${{ inputs.context-path }} -type f -name "*.mod" | head -20
-                
-                echo "=== Service directory contents ==="
-                ls -la ${{ inputs.context-path }}/${{ steps.image-tag.outputs.svc_folder }}/ || echo "Service directory not found"
-                
-                echo "=== Looking for go.mod files ==="
-                find ${{ inputs.context-path }} -name "go.mod" | head -20
-                
-                echo "=== Dockerfile location ==="
-                ls -la ${{ inputs.context-path }}/${{ steps.image-tag.outputs.svc_folder }}/${{ inputs.dockerfile-path }} || echo "Dockerfile not found"
-                
-                echo "=== End debug info ==="
+                mkdir -p /build-cache/go/build-cache /build-cache/go/mod /build-cache/python/pip /build-cache/python/poetry /build-cache/apk /build-cache/ccache /build-cache/tools /build-cache/apt
+                chmod -R 777 /build-cache
             volumeMounts:
-              - name: workspace
-                mountPath: /workspace
+              - name: build-cache
+                mountPath: /build-cache
           containers:
           - name: kaniko
             image: gcr.io/kaniko-project/executor:latest
@@ -346,21 +174,14 @@ runs:
               - "--compressed-caching=false"
               - "--ignore-var-run=true"
               - "--push-retry=3"
-              # Debug: Log build context contents
-              - "--build-arg=DEBUG_BUILD_CONTEXT=true"
-              # Pass comprehensive cache paths as build arguments
               - "--build-arg=GOCACHE=/build-cache/go/build-cache"
               - "--build-arg=GOMODCACHE=/build-cache/go/mod"
               - "--build-arg=PIP_CACHE_DIR=/build-cache/python/pip"
               - "--build-arg=POETRY_CACHE_DIR=/build-cache/python/poetry"
-              - "--build-arg=POETRY_INSTALLER_CACHE_DIR=/build-cache/python/poetry-installer"
               - "--build-arg=APK_CACHE_DIR=/build-cache/apk"
               - "--build-arg=APT_CACHE_DIR=/build-cache/apt"
               - "--build-arg=CCACHE_DIR=/build-cache/ccache"
               - "--build-arg=TOOLS_CACHE_DIR=/build-cache/tools"
-            env:
-              - name: SERVICE_NAME
-                value: "${{ inputs.service-name }}"
             volumeMounts:
               - name: workspace
                 mountPath: /workspace
@@ -383,72 +204,25 @@ runs:
               claimName: comprehensive-build-cache-${{ inputs.service-name }}
         EOF
 
-        echo "=== Generated Kaniko Pod YAML ==="
-        cat kaniko-build.yaml
-
-        # Apply the pod
         kubectl apply -f kaniko-build.yaml
+        kubectl wait --for=condition=Initialized pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=300s
+        kubectl wait --for=condition=Ready pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=60s
+        kubectl logs -f pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko
 
-        # Wait for pod to be created
-        echo "Waiting for pod to be created..."
-        kubectl wait --for=condition=PodScheduled pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=60s || true
-
-        # Check pod status
-        echo "Pod status after creation:"
-        kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o wide || true
-
-        # Wait for init container to complete
-        echo "Waiting for git-clone init container to complete..."
-        kubectl wait --for=condition=Initialized pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=300s || true
-
-        # Show init container logs
-        echo "=== Git Clone Init Container Logs ==="
-        kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c git-clone || true
-
-        # Show cache setup logs
-        echo "=== Comprehensive Cache Setup Init Container Logs ==="
-        kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c setup-comprehensive-cache || true
-
-        # Show debug workspace logs
-        echo "=== Debug Workspace Init Container Logs ==="
-        kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c debug-workspace || true
-
-        # Wait for main container to be ready
-        echo "Waiting for Kaniko container to be ready..."
-        kubectl wait --for=condition=Ready pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --timeout=60s || true
-
-        # Monitor the Kaniko build with periodic status checks
-        echo "=== Kaniko Build Logs ==="
-        kubectl logs -f pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -c kaniko || true
-
-        # Wait for the pod to complete (either Succeeded or Failed)
-        echo "Waiting for Kaniko build to complete..."
         while true; do
           POD_STATUS=$(kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-          echo "Current pod status: $POD_STATUS"
           if [ "$POD_STATUS" = "Succeeded" ] || [ "$POD_STATUS" = "Failed" ]; then
             break
           fi
           sleep 10
         done
 
-        # Check final status
         POD_STATUS=$(kubectl get pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} -o jsonpath='{.status.phase}')
-        echo "Final pod status: $POD_STATUS"
-
-        # Show pod events for debugging
-        echo "=== Pod Events ==="
-        kubectl describe pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} | grep -A 20 "Events:" || true
 
         if [ "$POD_STATUS" = "Succeeded" ]; then
-          echo "✅ Kaniko build completed successfully!"
-          echo "Built image: ${{ steps.image-tag.outputs.image_url }}"
-          echo "${{ steps.image-tag.outputs.image_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Build completed: ${{ steps.image-tag.outputs.image_url }}"
         else
-          echo "❌ Kaniko build failed with status: $POD_STATUS"
-          echo "=== Full Pod Description ==="
-          kubectl describe pod kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }}
-          echo "=== Final Container Logs ==="
+          echo "❌ Build failed with status: $POD_STATUS"
           kubectl logs pod/kaniko-build-${{ steps.image-tag.outputs.svc_name }}-${{ github.run_id }} -n ${{ inputs.namespace }} --all-containers=true || true
           exit 1
         fi
