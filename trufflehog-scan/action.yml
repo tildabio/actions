@@ -1,0 +1,153 @@
+name: 'TruffleHog Secret Scanner'
+description: 'Scans filesystem for verified secrets using TruffleHog'
+author: 'Tilda Bio'
+
+inputs:
+  scan-path:
+    description: 'Path to scan (relative to repository root)'
+    required: false
+    default: '.'
+  only-verified:
+    description: 'Only report verified secrets'
+    required: false
+    default: 'true'
+  fail-on-findings:
+    description: 'Fail the workflow if secrets are found'
+    required: false
+    default: 'true'
+  extra-args:
+    description: 'Additional arguments to pass to TruffleHog'
+    required: false
+    default: ''
+
+outputs:
+  secrets-found:
+    description: 'Number of secrets found'
+    value: ${{ steps.parse-results.outputs.secrets_count }}
+  scan-status:
+    description: 'Status of the scan (clean/secrets-found)'
+    value: ${{ steps.parse-results.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run TruffleHog filesystem scan
+      shell: bash
+      run: |
+        echo "🐷🔑 Running TruffleHog filesystem scan..."
+        echo "📁 Scan path: ${{ inputs.scan-path }}"
+        echo "✓ Only verified: ${{ inputs.only-verified }}"
+        echo ""
+
+        TRUFFLEHOG_ARGS="filesystem ${{ inputs.scan-path }} --json --no-update"
+
+        if [ "${{ inputs.only-verified }}" == "true" ]; then
+          TRUFFLEHOG_ARGS="$TRUFFLEHOG_ARGS --only-verified"
+        fi
+
+        if [ -n "${{ inputs.extra-args }}" ]; then
+          TRUFFLEHOG_ARGS="$TRUFFLEHOG_ARGS ${{ inputs.extra-args }}"
+        fi
+
+        docker run --rm -v "$PWD:${{ inputs.scan-path }}" ghcr.io/trufflesecurity/trufflehog:latest \
+          $TRUFFLEHOG_ARGS 2>&1 | tee trufflehog-output.json
+
+    - name: Parse and format TruffleHog results
+      id: parse-results
+      shell: bash
+      run: |
+        python3 << 'EOF'
+        import json
+        import sys
+        import os
+
+        secrets_found = []
+
+        # Parse the output line by line
+        try:
+            with open('trufflehog-output.json', 'r') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+
+                        # Only process lines that have SourceMetadata (actual secrets)
+                        if 'SourceMetadata' in data and 'DetectorType' in data:
+                            secrets_found.append(data)
+                    except json.JSONDecodeError:
+                        # Skip non-JSON lines (info/error logs)
+                        continue
+        except FileNotFoundError:
+            print("⚠️  TruffleHog output file not found")
+            sys.exit(0)
+
+        # Set outputs
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"secrets_count={len(secrets_found)}\n")
+            if len(secrets_found) == 0:
+                f.write("status=clean\n")
+            else:
+                f.write("status=secrets-found\n")
+
+        if not secrets_found:
+            print("✅ No verified secrets found by TruffleHog!")
+            sys.exit(0)
+
+        print(f"\n🚨 TruffleHog found {len(secrets_found)} VERIFIED secret(s)!\n")
+        print("=" * 80)
+
+        for idx, secret in enumerate(secrets_found, 1):
+            metadata = secret.get('SourceMetadata', {}).get('Data', {}).get('Filesystem', {})
+            file_path = metadata.get('file', 'Unknown').replace('${{ inputs.scan-path }}/', '')
+            line_num = metadata.get('line', '?')
+
+            detector = secret.get('DetectorName', 'Unknown')
+            description = secret.get('DetectorDescription', 'No description')
+            verified = "✅ VERIFIED" if secret.get('Verified', False) else "⚠️  UNVERIFIED"
+
+            extra_data = secret.get('ExtraData', {})
+            redacted = secret.get('Redacted', '')
+
+            print(f"\n#{idx} {detector} Secret {verified}")
+            print(f"   Location: {file_path}:{line_num}")
+            print(f"   Type: {description}")
+
+            if redacted:
+                print(f"   Redacted: {redacted}")
+
+            if extra_data:
+                print(f"   Details:")
+                for key, value in extra_data.items():
+                    if key in ['username', 'email', 'name', 'project', 'account_type', 'expiry', 'url']:
+                        print(f"      • {key}: {value}")
+
+                if 'rotation_guide' in extra_data:
+                    print(f"      • 🔄 Rotation guide: {extra_data['rotation_guide']}")
+
+            print("-" * 80)
+
+        print(f"\n⚠️  CRITICAL: {len(secrets_found)} verified secret(s) detected!")
+        print("Action required: Rotate these credentials immediately.\n")
+
+        # Exit with error if configured to fail
+        if "${{ inputs.fail-on-findings }}" == "true":
+            sys.exit(1)
+        EOF
+
+    - name: Upload TruffleHog results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trufflehog-results
+        path: trufflehog-output.json
+        retention-days: 30
+
+branding:
+  icon: 'shield'
+  color: 'red'

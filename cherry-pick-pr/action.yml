@@ -1,0 +1,164 @@
+name: 'Cherry Pick PR to Target Branch'
+description: 'Cherry picks a merged PR to a target branch based on PR body decision'
+author: 'Tilda Bio'
+
+inputs:
+  source-branch:
+    description: 'Branch where PR was merged (e.g., master, main, production)'
+    required: true
+  target-branch:
+    description: 'Branch to cherry-pick into (e.g., production, master, staging)'
+    required: true
+  github-token:
+    description: 'GitHub token for API operations (use secrets.GH_PAT or secrets.GITHUB_TOKEN)'
+    required: true
+  pr-body:
+    description: 'The PR body text to check for merge decision'
+    required: true
+  cherry-pick-branch-prefix:
+    description: 'Prefix for cherry-pick branch name'
+    required: false
+    default: 'cherry-pick-'
+  cherry-pick-pr-body:
+    description: 'Body text for the created cherry-pick PR'
+    required: false
+    default: '[x] cleanup branches'
+  labels:
+    description: 'Labels to add to cherry-pick PR (newline or comma separated)'
+    required: false
+    default: |
+      cherry-pick
+      automerge
+  decision-pattern:
+    description: 'Custom decision pattern to search (optional, auto-generated from target-branch if not provided)'
+    required: false
+    default: ''
+
+outputs:
+  should-cherry-pick:
+    description: 'Whether the cherry-pick should proceed (true/false)'
+    value: ${{ steps.check-decision.outputs.should_merge }}
+  cherry-pick-status:
+    description: 'Status of the cherry-pick operation (success/skipped/failed)'
+    value: ${{ steps.set-status.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check merge decision
+      id: check-decision
+      shell: bash
+      env:
+        PR_BODY: ${{ inputs.pr-body }}
+        TARGET_BRANCH: ${{ inputs.target-branch }}
+        CUSTOM_PATTERN: ${{ inputs.decision-pattern }}
+      run: |
+        # Debug: Show what we're working with (first 200 chars for security)
+        echo "🔍 PR Body (first 200 chars): ${PR_BODY:0:200}"
+        echo "📏 PR Body length: ${#PR_BODY}"
+        echo "🎯 Target branch: $TARGET_BRANCH"
+
+        # Validate PR_BODY is not empty
+        if [ -z "$PR_BODY" ]; then
+          echo "⚠️ PR body is empty"
+          echo "should_merge=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Write PR body to temp file safely using printf to avoid shell interpretation
+        # This prevents issues with:
+        # - Backslash escapes (echo interprets \n, \t, etc.)
+        # - Command substitution attempts in malicious PR bodies
+        # - Very long bodies that might exceed command line limits
+        printf '%s\n' "$PR_BODY" > /tmp/pr_body_$$.txt
+
+        # Normalize the PR body:
+        # 1. Collapse multiple spaces/tabs/newlines into single space
+        # 2. Convert to lowercase for case-insensitive matching
+        # 3. Trim leading/trailing whitespace
+        # Use cat + pipeline instead of echo for safety
+        NORMALIZED_BODY=$(cat /tmp/pr_body_$$.txt | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        # Clean up temp file
+        rm -f /tmp/pr_body_$$.txt
+
+        echo "🔄 Normalized body (first 100 chars): ${NORMALIZED_BODY:0:100}"
+
+        # Determine the pattern to search for
+        if [ -n "$CUSTOM_PATTERN" ]; then
+          SEARCH_PATTERN="$CUSTOM_PATTERN"
+          echo "📝 Using custom pattern: $SEARCH_PATTERN"
+        else
+          # Escape special regex characters in branch name (e.g., "release-v1.0" has ".")
+          TARGET_BRANCH_LOWER=$(echo "${TARGET_BRANCH}" | tr '[:upper:]' '[:lower:]')
+          TARGET_BRANCH_ESCAPED=$(echo "${TARGET_BRANCH_LOWER}" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
+
+          # Flexible pattern with word boundaries to prevent false positives
+          # Uses \<yes\> to match "yes" as a complete word, preventing:
+          # - "yesterday" (false positive)
+          # - "yesno" (false positive)
+          # Still accepts:
+          # - "yes!" "yes." "yes," (punctuation after yes)
+          # - "yes followed by more text"
+          SEARCH_PATTERN="merge[[:space:]]+this[[:space:]]+pr[[:space:]]+into[[:space:]]+branch[[:space:]]+${TARGET_BRANCH_ESCAPED}[[:space:]]*:[[:space:]]*\<yes\>"
+          echo "📝 Using auto-generated pattern for branch: $TARGET_BRANCH"
+        fi
+
+        # Check for Yes decision
+        if echo "$NORMALIZED_BODY" | grep -qE "$SEARCH_PATTERN"; then
+          # Additional safety check: explicitly reject "yes/no" or "yes/" patterns
+          if echo "$NORMALIZED_BODY" | grep -qE ":[[:space:]]*\<yes\>[[:space:]]*/"; then
+            echo "should_merge=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Ambiguous decision detected: 'yes/' pattern found"
+            echo "📝 Please use either 'Yes' or 'No', not both"
+            exit 0
+          fi
+
+          # Valid "yes" decision found
+          echo "should_merge=true" >> $GITHUB_OUTPUT
+          echo "✅ Will cherry-pick to $TARGET_BRANCH branch"
+          echo "🎯 Found merge directive in PR body"
+        else
+          echo "should_merge=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ Will NOT cherry-pick to $TARGET_BRANCH branch"
+          echo "📝 No merge directive found in PR body"
+        fi
+
+    - name: Checkout repository
+      if: steps.check-decision.outputs.should_merge == 'true'
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.github-token }}
+
+    - name: Cherry pick to target branch
+      if: steps.check-decision.outputs.should_merge == 'true'
+      id: cherry-pick
+      uses: carloscastrojumo/github-cherry-pick-action@v1.0.9
+      with:
+        branch: ${{ inputs.target-branch }}
+        cherry-pick-branch: ${{ inputs.cherry-pick-branch-prefix }}${{ github.event.pull_request.head.ref }}
+        body: ${{ inputs.cherry-pick-pr-body }}
+        labels: ${{ inputs.labels }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Set output status
+      id: set-status
+      shell: bash
+      if: always()
+      run: |
+        if [ "${{ steps.check-decision.outputs.should_merge }}" != "true" ]; then
+          echo "status=skipped" >> $GITHUB_OUTPUT
+          echo "📊 Status: Skipped (no merge decision found)"
+        elif [ "${{ steps.cherry-pick.outcome }}" == "success" ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "📊 Status: Success"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "📊 Status: Failed"
+        fi
+
+branding:
+  icon: 'git-branch'
+  color: 'blue'
