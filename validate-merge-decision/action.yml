@@ -1,0 +1,248 @@
+name: 'Validate Merge Decision'
+description: 'Validates PR body for proper merge decision to target branch'
+author: 'Tilda Bio'
+
+inputs:
+  base-branch:
+    description: 'The branch this PR is targeting (e.g., master, main, production)'
+    required: true
+  pr-body:
+    description: 'The PR body text to validate'
+    required: true
+  github-token:
+    description: 'GitHub token for posting comments'
+    required: true
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  pr-user:
+    description: 'Pull request author username'
+    required: true
+  repository:
+    description: 'Repository name in format owner/repo'
+    required: true
+
+outputs:
+  validation-status:
+    description: 'Validation result: valid_yes, valid_no, conflicting, placeholder, invalid, not_applicable'
+    value: ${{ steps.validation.outputs.validation_status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate merge decision
+      id: validation
+      shell: bash
+      env:
+        PR_BODY: ${{ inputs.pr-body }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+      run: |
+        # Determine target branch based on base branch
+        # If merging to master/main → check for production
+        # If merging to production → check for master/main
+        if [[ "$BASE_BRANCH" == "master" ]] || [[ "$BASE_BRANCH" == "main" ]]; then
+          TARGET_BRANCH="production"
+        elif [[ "$BASE_BRANCH" == "production" ]]; then
+          # Try to detect if repo uses master or main by checking PR body
+          if printf '%s\n' "$PR_BODY" | grep -iq "merge this pr into branch main"; then
+            TARGET_BRANCH="main"
+          else
+            TARGET_BRANCH="master"
+          fi
+        else
+          echo "validation_status=not_applicable" >> $GITHUB_OUTPUT
+          echo "⚠️ Unknown base branch: $BASE_BRANCH - skipping validation"
+          exit 0
+        fi
+
+        # Use environment variable instead of direct substitution to avoid shell interpretation
+        # Write PR body to file safely using printf to properly expand the variable
+        printf '%s\n' "$PR_BODY" > /tmp/pr_body.txt
+
+        # Normalize the PR body more robustly - handle Unicode and special characters properly
+        # Use sed instead of tr for better Unicode support
+        NORMALIZED_BODY=$(cat /tmp/pr_body.txt | sed 's/[[:space:]]\+/ /g' | tr '[:upper:]' '[:lower:]' 2>/dev/null || cat /tmp/pr_body.txt | sed 's/[[:space:]]\+/ /g')
+
+        # Define the exact patterns we're looking for (more precise matching)
+        TARGET_BRANCH_LOWER=$(echo "$TARGET_BRANCH" | tr '[:upper:]' '[:lower:]')
+        YES_PATTERN="merge this pr into branch ${TARGET_BRANCH_LOWER}: yes"
+        NO_PATTERN="merge this pr into branch ${TARGET_BRANCH_LOWER}: no"
+        PLACEHOLDER_PATTERN="**[replace with yes or no]**"
+
+        # Debug: Print normalized body for troubleshooting (first 200 chars)
+        echo "DEBUG: Base branch: $BASE_BRANCH"
+        echo "DEBUG: Target branch: $TARGET_BRANCH"
+        echo "DEBUG: Normalized body (first 200 chars):"
+        printf '%s\n' "$NORMALIZED_BODY" | head -c 200
+        echo "..."
+        echo ""
+
+        # Use a more robust pattern matching approach that handles special characters
+        # Check if both Yes and No are present
+        if printf '%s\n' "$NORMALIZED_BODY" | grep -q "$YES_PATTERN" && printf '%s\n' "$NORMALIZED_BODY" | grep -q "$NO_PATTERN"; then
+          echo "validation_status=conflicting" >> $GITHUB_OUTPUT
+          echo "❌ ERROR: Both 'Yes' and 'No' found in PR description."
+          echo ""
+          echo "🔧 QUICK FIX: Remove one option - keep either 'Yes' or 'No', not both."
+          exit 1
+        fi
+
+        # Check for valid decision FIRST - if we find a valid decision, accept it
+        # Use grep with fixed strings (-F) to avoid regex interpretation issues with special characters
+        if printf '%s\n' "$NORMALIZED_BODY" | grep -F "$YES_PATTERN" > /dev/null; then
+          echo "validation_status=valid_yes" >> $GITHUB_OUTPUT
+          echo "✅ Decision: Will merge to $TARGET_BRANCH branch"
+        elif printf '%s\n' "$NORMALIZED_BODY" | grep -F "$NO_PATTERN" > /dev/null; then
+          echo "validation_status=valid_no" >> $GITHUB_OUTPUT
+          echo "✅ Decision: Will NOT merge to $TARGET_BRANCH branch"
+        else
+          # Only check for placeholder if no valid decision was found
+          if printf '%s\n' "$NORMALIZED_BODY" | grep -q "$PLACEHOLDER_PATTERN"; then
+            echo "validation_status=placeholder" >> $GITHUB_OUTPUT
+            echo "❌ ERROR: Please replace the placeholder with your decision."
+            echo ""
+            echo "🔧 QUICK FIX: Replace '**[Replace with Yes or No]**' with either:"
+            echo "   • Merge this PR into branch $TARGET_BRANCH: Yes"
+            echo "   • Merge this PR into branch $TARGET_BRANCH: No"
+            exit 1
+          else
+            # No valid decision and no placeholder found
+            echo "validation_status=invalid" >> $GITHUB_OUTPUT
+            echo "❌ ERROR: No valid $TARGET_BRANCH merge decision found."
+            echo ""
+            echo "🔧 QUICK FIX: Add exactly one of these lines to your PR description:"
+            echo "   • Merge this PR into branch $TARGET_BRANCH: Yes"
+            echo "   • Merge this PR into branch $TARGET_BRANCH: No"
+            echo ""
+            echo "💡 NOTE: Extra spaces OK, case doesn't matter (yes/YES/Yes all work)"
+            exit 1
+          fi
+        fi
+
+        # Export TARGET_BRANCH for use in comment step
+        echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+
+        # Cleanup temporary file
+        rm -f /tmp/pr_body.txt
+
+    - name: Checkout repository for commenting
+      if: failure()
+      uses: actions/checkout@v4
+
+    - name: Comment on PR when validation fails
+      if: failure()
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_USER: ${{ inputs.pr-user }}
+        REPOSITORY: ${{ inputs.repository }}
+        VALIDATION_STATUS: ${{ steps.validation.outputs.validation_status }}
+      run: |
+        # Generate the help message based on validation status
+        if [[ "$VALIDATION_STATUS" == "conflicting" ]]; then
+          cat > help_message.txt << HELP_EOF
+        ## 🚨 ${TARGET_BRANCH^} Merge Decision - Conflicting Options
+
+        Hi @${PR_USER}! 👋
+
+        Your PR description contains **both 'Yes' and 'No'** for the $TARGET_BRANCH merge decision.
+
+        ### ✅ **How to Fix:**
+        Please make a conscious decision by keeping **only one** option:
+
+        - Keep \`Merge this PR into branch $TARGET_BRANCH: Yes\` - to merge into $TARGET_BRANCH
+        - Keep \`Merge this PR into branch $TARGET_BRANCH: No\` - to NOT merge into $TARGET_BRANCH
+
+        **Remove the other option** from your PR description.
+
+        ---
+        *This validation ensures we make conscious decisions about deployments* 🎯
+        HELP_EOF
+
+        elif [[ "$VALIDATION_STATUS" == "placeholder" ]]; then
+          cat > help_message.txt << HELP_EOF
+        ## 🚨 ${TARGET_BRANCH^} Merge Decision - Placeholder Found
+
+        Hi @${PR_USER}! 👋
+
+        Your PR description still contains the placeholder text.
+
+        ### ✅ **How to Fix:**
+        Replace \`**[Replace with Yes or No]**\` with either:
+
+        - \`Merge this PR into branch $TARGET_BRANCH: Yes\` - to merge into $TARGET_BRANCH
+        - \`Merge this PR into branch $TARGET_BRANCH: No\` - to NOT merge into $TARGET_BRANCH
+
+        ---
+        *This validation ensures we make conscious decisions about deployments* 🎯
+        HELP_EOF
+
+        else
+          cat > help_message.txt << HELP_EOF
+        ## 🚨 ${TARGET_BRANCH^} Merge Decision Required
+
+        Hi @${PR_USER}! 👋
+
+        The **Validate ${TARGET_BRANCH^} Merge Decision** check is failing because your PR description is missing a proper $TARGET_BRANCH merge decision.
+
+        ### ✅ **How to Fix:**
+        Please add **exactly one** of these lines to your PR description:
+
+        - \`Merge this PR into branch $TARGET_BRANCH: Yes\` - to merge this PR into $TARGET_BRANCH
+        - \`Merge this PR into branch $TARGET_BRANCH: No\` - to keep this PR only in the current branch
+
+        ### 📝 **Examples:**
+
+        **✅ Valid formats:**
+        \`\`\`
+        Merge this PR into branch $TARGET_BRANCH: Yes
+        \`\`\`
+        \`\`\`
+        Merge this PR into branch $TARGET_BRANCH: No
+        \`\`\`
+
+        **❌ Invalid formats:**
+        - \`Merge this PR into branch $TARGET_BRANCH: yes/no\`
+        - \`Merge this PR into branch $TARGET_BRANCH: maybe\`
+        - \`**[Replace with Yes or No]**\`
+
+        ### 💡 **Notes:**
+        - Extra spaces are okay
+        - Case doesn't matter (\`yes\`, \`YES\`, \`Yes\` all work)
+        - Just edit your PR description and the check will automatically re-run
+
+        ---
+        *This validation ensures we make conscious decisions about deployments* 🎯
+        HELP_EOF
+        fi
+
+        # Print the message to logs for user reference
+        echo "============================================"
+        echo "📋 INSTRUCTIONS FOR FIXING YOUR PR:"
+        echo "============================================"
+        cat help_message.txt
+        echo "============================================"
+        echo ""
+
+        # Try to post the comment using GitHub CLI
+        echo "Attempting to post comment on PR..."
+        if command -v gh &> /dev/null; then
+          gh pr comment $PR_NUMBER --body-file help_message.txt
+        else
+          # Fallback to direct API call
+          COMMENT_BODY=$(cat help_message.txt | jq -Rs .)
+          API_URL="https://api.github.com/repos/$REPOSITORY/issues/$PR_NUMBER/comments"
+
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API_URL" \
+            -d "{\"body\": $COMMENT_BODY}"
+        fi
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
