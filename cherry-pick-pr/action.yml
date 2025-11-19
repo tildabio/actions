@@ -136,12 +136,11 @@ runs:
       id: cherry-pick
       uses: carloscastrojumo/github-cherry-pick-action@v1.0.9
       with:
+        token: ${{ inputs.github-token }}
         branch: ${{ inputs.target-branch }}
         cherry-pick-branch: ${{ inputs.cherry-pick-branch-prefix }}${{ github.event.pull_request.head.ref }}
         body: ${{ inputs.cherry-pick-pr-body }}
         labels: ${{ inputs.labels }}
-      env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Set output status
       id: set-status
