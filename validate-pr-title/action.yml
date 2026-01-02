@@ -1,0 +1,76 @@
+name: 'Validate PR Title'
+description: 'Validates PR title starts with ENG-XXXX format (e.g., ENG-1234)'
+author: 'Tilda Bio'
+
+inputs:
+  pr-title:
+    description: 'The PR title to validate'
+    required: true
+  github-token:
+    description: 'GitHub token for posting comments'
+    required: true
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  pr-user:
+    description: 'Pull request author username'
+    required: true
+  repository:
+    description: 'Repository name in format owner/repo'
+    required: true
+
+outputs:
+  validation-status:
+    description: 'Validation result: valid or invalid'
+    value: ${{ steps.validation.outputs.validation_status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate PR title format
+      id: validation
+      shell: bash
+      env:
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_USER: ${{ inputs.pr-user }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        REPOSITORY: ${{ inputs.repository }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        echo "Validating PR title: $PR_TITLE"
+
+        if [[ "$PR_TITLE" =~ ^ENG-[0-9]+ ]]; then
+          echo "validation_status=valid" >> $GITHUB_OUTPUT
+          echo "PR title is valid: starts with ${BASH_REMATCH[0]}"
+        else
+          echo "validation_status=warning" >> $GITHUB_OUTPUT
+          echo "WARNING: PR title does not start with ENG-XXXX format"
+          echo ""
+          echo "Current title: $PR_TITLE"
+          echo ""
+          echo "Consider adding a ticket ID if this PR is associated with a ticket"
+          echo "   Example: ENG-1234 Add new feature"
+
+          # Post warning comment on PR
+          COMMENT="## Reminder: Link PR to a Ticket
+
+        Hi @${PR_USER}!
+
+        This PR title does not include a ticket ID.
+
+        **Current Title:** \`${PR_TITLE}\`
+
+        If this PR is associated with a ticket, please update the title to start with \`ENG-XXXX\`.
+
+        **Examples:**
+        - \`ENG-1234 Add user authentication\`
+        - \`ENG-5678 Fix login bug\`
+
+        If this PR is not associated with a ticket, you can ignore this message."
+
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$COMMENT" || true
+        fi
+
+branding:
+  icon: 'edit-3'
+  color: 'blue'
