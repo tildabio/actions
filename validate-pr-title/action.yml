@@ -43,37 +43,32 @@ runs:
           echo "validation_status=valid" >> $GITHUB_OUTPUT
           echo "PR title is valid: starts with ${BASH_REMATCH[0]}"
         else
-          echo "validation_status=invalid" >> $GITHUB_OUTPUT
-          echo "ERROR: PR title must start with ENG-XXXX (e.g., ENG-1234)"
+          echo "validation_status=warning" >> $GITHUB_OUTPUT
+          echo "WARNING: PR title does not start with ENG-XXXX format"
           echo ""
           echo "Current title: $PR_TITLE"
           echo ""
-          echo "QUICK FIX: Update your PR title to start with a valid ticket ID"
+          echo "Consider adding a ticket ID if this PR is associated with a ticket"
           echo "   Example: ENG-1234 Add new feature"
 
-          # Post comment on PR
-          COMMENT="## PR Title Validation Failed
+          # Post warning comment on PR
+          COMMENT="## Reminder: Link PR to a Ticket
 
         Hi @${PR_USER}!
 
-        Your PR title does not follow the required format.
+        This PR title does not include a ticket ID.
 
         **Current Title:** \`${PR_TITLE}\`
 
-        **Required Format:** PR titles must start with \`ENG-XXXX\` where \`XXXX\` are digits.
+        If this PR is associated with a ticket, please update the title to start with \`ENG-XXXX\`.
 
         **Examples:**
         - \`ENG-1234 Add user authentication\`
         - \`ENG-5678 Fix login bug\`
 
-        **How to Fix:**
-        1. Edit your PR title
-        2. Add the ticket ID at the beginning (e.g., \`ENG-1234\`)
-        3. The check will automatically re-run"
+        If this PR is not associated with a ticket, you can ignore this message."
 
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$COMMENT" || true
-
-          exit 1
         fi
 
 branding:
