@@ -1,0 +1,128 @@
+name: 'Validate PR Title'
+description: 'Validates PR title starts with ENG-XXXX format (e.g., ENG-1234)'
+author: 'Tilda Bio'
+
+inputs:
+  pr-title:
+    description: 'The PR title to validate'
+    required: true
+  github-token:
+    description: 'GitHub token for posting comments'
+    required: true
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  pr-user:
+    description: 'Pull request author username'
+    required: true
+  repository:
+    description: 'Repository name in format owner/repo'
+    required: true
+
+outputs:
+  validation-status:
+    description: 'Validation result: valid or invalid'
+    value: ${{ steps.validation.outputs.validation_status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate PR title format
+      id: validation
+      shell: bash
+      env:
+        PR_TITLE: ${{ inputs.pr-title }}
+      run: |
+        echo "Validating PR title: $PR_TITLE"
+
+        # Check if title starts with ENG-XXXX where XXXX are digits
+        if [[ "$PR_TITLE" =~ ^ENG-[0-9]+ ]]; then
+          echo "validation_status=valid" >> $GITHUB_OUTPUT
+          echo "✅ PR title is valid: starts with ENG-${BASH_REMATCH[0]#ENG-}"
+        else
+          echo "validation_status=invalid" >> $GITHUB_OUTPUT
+          echo "❌ ERROR: PR title must start with ENG-XXXX (e.g., ENG-1234)"
+          echo ""
+          echo "Current title: $PR_TITLE"
+          echo ""
+          echo "🔧 QUICK FIX: Update your PR title to start with a valid ticket ID"
+          echo "   Example: ENG-1234 Add new feature"
+          exit 1
+        fi
+
+    - name: Comment on PR when validation fails
+      if: failure()
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_USER: ${{ inputs.pr-user }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        cat > help_message.txt << 'HELP_EOF'
+## 🚨 PR Title Validation Failed
+
+Hi @${PR_USER}! 👋
+
+Your PR title does not follow the required format.
+
+### ❌ Current Title:
+```
+${PR_TITLE}
+```
+
+### ✅ Required Format:
+PR titles must start with `ENG-XXXX` where `XXXX` are digits.
+
+### 📝 Examples:
+
+**✅ Valid titles:**
+- `ENG-1234 Add user authentication`
+- `ENG-5678 Fix login bug`
+- `ENG-9999 Update documentation`
+
+**❌ Invalid titles:**
+- `Add user authentication`
+- `eng-1234 Add feature` (must be uppercase ENG)
+- `ENG Add feature` (missing ticket number)
+
+### 🔧 How to Fix:
+1. Edit your PR title
+2. Add the ticket ID at the beginning (e.g., `ENG-1234`)
+3. The check will automatically re-run
+
+---
+*This validation ensures all PRs are linked to tracked issues* 🎯
+HELP_EOF
+
+        # Substitute variables in the message
+        sed -i.bak "s/\${PR_USER}/${PR_USER}/g" help_message.txt
+        sed -i.bak "s/\${PR_TITLE}/${PR_TITLE//\//\\/}/g" help_message.txt
+        rm -f help_message.txt.bak
+
+        # Print the message to logs
+        echo "============================================"
+        echo "📋 INSTRUCTIONS FOR FIXING YOUR PR:"
+        echo "============================================"
+        cat help_message.txt
+        echo "============================================"
+
+        # Post comment using GitHub CLI
+        if command -v gh &> /dev/null; then
+          gh pr comment $PR_NUMBER --body-file help_message.txt || true
+        else
+          COMMENT_BODY=$(cat help_message.txt | jq -Rs .)
+          API_URL="https://api.github.com/repos/$REPOSITORY/issues/$PR_NUMBER/comments"
+
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API_URL" \
+            -d "{\"body\": $COMMENT_BODY}" || true
+        fi
+
+branding:
+  icon: 'edit-3'
+  color: 'blue'
