@@ -2,8 +2,14 @@ name: "Build and Push to Google Artifactory"
 description: "Build a docker container and publish it to Google Artifactory."
 inputs:
   google-key:
-    description: "Key to authenticate gcloud"
-    required: true
+    description: "Key to authenticate gcloud (deprecated, use WIF instead)"
+    required: false
+  workload_identity_provider:
+    description: "Workload Identity Federation provider (e.g., projects/123/locations/global/workloadIdentityPools/github-actions/providers/github)"
+    required: false
+  service_account:
+    description: "Service account email to impersonate via WIF"
+    required: false
   service-name:
     description: "service name"
     required: true
@@ -36,8 +42,8 @@ inputs:
     required: false
 outputs:
   image:
-    description: "Build docker image"
-    value: testing custom action
+    description: "Built docker image tag"
+    value: ${{ steps.meta.outputs.tags }}
 runs:
   using: "composite"
   steps:
@@ -54,8 +60,16 @@ runs:
         pattern: ${{ github.repository_owner }}/
         replace-with: ""
 
-    - uses: google-github-actions/auth@v1
-      if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Auth with Workload Identity Federation (preferred)
+    - uses: google-github-actions/auth@v2
+      if: inputs.workload_identity_provider != '' && github.event.pull_request.user.login != 'dependabot[bot]'
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    # Fallback: Auth with service account JSON (deprecated)
+    - uses: google-github-actions/auth@v2
+      if: inputs.workload_identity_provider == '' && inputs.google-key != '' && github.event.pull_request.user.login != 'dependabot[bot]'
       with:
         credentials_json: ${{ inputs.google-key }}
 
