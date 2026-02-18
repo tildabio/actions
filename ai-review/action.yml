@@ -1,5 +1,5 @@
 name: 'AI Code Review'
-description: 'Performs AI-powered code review on pull requests using Claude with inline comments'
+description: 'AI code review on pull requests using Claude — inline, incremental, deduplicated, Tilda-specific'
 author: 'Tilda Bio'
 
 inputs:
@@ -20,31 +20,44 @@ inputs:
     required: false
     default: 'claude-sonnet-4-5-20250929'
   max-diff-size:
-    description: 'Maximum diff size in characters to send for review (to control token usage)'
+    description: 'Maximum diff size in characters (to control token usage)'
     required: false
     default: '100000'
-  review-scope:
-    description: 'What to focus the review on (bugs, security, performance, style, all)'
+  max-comments:
+    description: 'Maximum inline comments per review'
     required: false
-    default: 'all'
-  custom-prompt:
-    description: 'Additional instructions to include in the review prompt'
+    default: '5'
+  context-file:
+    description: 'Path to a repo-specific context file (e.g. .github/AI_CONTEXT.md). Requires checkout.'
     required: false
     default: ''
+  custom-prompt:
+    description: 'Additional instructions appended to the review prompt'
+    required: false
+    default: ''
+  bot-username:
+    description: 'GitHub username of the bot posting reviews (for deduplication)'
+    required: false
+    default: 'ojasgo'
 
 outputs:
   review-status:
     description: 'Status of the review (success, skipped, error)'
-    value: ${{ steps.post-review.outputs.review_status }}
+    value: ${{ steps.run-review.outputs.review_status }}
   comments-posted:
     description: 'Number of inline comments posted'
-    value: ${{ steps.post-review.outputs.comments_posted }}
+    value: ${{ steps.run-review.outputs.comments_posted }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Fetch PR diff and run AI review
-      id: ai-review
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run AI review
+      id: run-review
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh-token }}
@@ -53,265 +66,351 @@ runs:
         REPOSITORY: ${{ inputs.repository }}
         MODEL: ${{ inputs.model }}
         MAX_DIFF_SIZE: ${{ inputs.max-diff-size }}
-        REVIEW_SCOPE: ${{ inputs.review-scope }}
+        MAX_COMMENTS: ${{ inputs.max-comments }}
+        CONTEXT_FILE: ${{ inputs.context-file }}
         CUSTOM_PROMPT: ${{ inputs.custom-prompt }}
+        BOT_USERNAME: ${{ inputs.bot-username }}
       run: |
-        set -euo pipefail
+        python3 << 'PYEOF'
+        import json
+        import os
+        import subprocess
+        import sys
+        import urllib.request
+        import urllib.error
 
-        echo "Fetching PR #${PR_NUMBER} details from ${REPOSITORY}..."
+        # ─── Config ───────────────────────────────────────────────────────
+        PR_NUMBER      = os.environ["PR_NUMBER"]
+        REPOSITORY     = os.environ["REPOSITORY"]
+        MODEL          = os.environ["MODEL"]
+        MAX_DIFF_SIZE  = int(os.environ["MAX_DIFF_SIZE"])
+        MAX_COMMENTS   = int(os.environ["MAX_COMMENTS"])
+        CONTEXT_FILE   = os.environ.get("CONTEXT_FILE", "")
+        CUSTOM_PROMPT  = os.environ.get("CUSTOM_PROMPT", "")
+        BOT_USERNAME   = os.environ.get("BOT_USERNAME", "ojasgo")
+        ANTHROPIC_KEY  = os.environ["ANTHROPIC_API_KEY"]
 
-        # Fetch PR metadata
-        PR_DATA=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json title,body,baseRefName,headRefName)
-        PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-        PR_BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
-        BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
-        HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+        SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
-        echo "PR: $PR_TITLE"
-        echo "Branch: $HEAD_BRANCH -> $BASE_BRANCH"
+        def gh(*args):
+            r = subprocess.run(["gh"] + list(args), capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                print(f"gh error: {' '.join(args)}\n{r.stderr}", file=sys.stderr)
+            return r.stdout.strip()
 
-        # Fetch the diff
-        DIFF=$(gh pr diff "$PR_NUMBER" --repo "$REPOSITORY" 2>/dev/null || echo "")
+        def out(key, val):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write(f"{key}={val}\n")
 
-        if [ -z "$DIFF" ]; then
-          echo "No diff found or PR has no changes."
-          echo "review_status=skipped" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
+        # ─── 1. PR metadata ──────────────────────────────────────────────
+        print(f"Fetching PR #{PR_NUMBER}...")
+        pr = json.loads(gh("pr", "view", PR_NUMBER, "--repo", REPOSITORY,
+                           "--json", "title,body,baseRefName,headRefName,commits"))
+        pr_title    = pr["title"]
+        pr_body     = (pr.get("body") or "")[:2000]
+        base_branch = pr["baseRefName"]
+        head_branch = pr["headRefName"]
+        commits     = pr.get("commits", [])
+        head_sha    = commits[-1]["oid"] if commits else ""
+        print(f"  {head_branch} -> {base_branch} ({len(commits)} commits, HEAD {head_sha[:8]})")
 
-        DIFF_SIZE=${#DIFF}
-        echo "Diff size: $DIFF_SIZE characters"
+        # ─── 2. Incremental: find last AI review commit ──────────────────
+        print("Checking for previous AI reviews...")
+        raw = gh("api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--paginate")
+        reviews = json.loads(raw) if raw else []
 
-        if [ "$DIFF_SIZE" -gt "$MAX_DIFF_SIZE" ]; then
-          echo "Diff exceeds max size ($MAX_DIFF_SIZE chars). Truncating..."
-          DIFF="${DIFF:0:$MAX_DIFF_SIZE}
+        last_sha = None
+        for rev in reversed(reviews):
+            if (rev.get("user", {}).get("login") == BOT_USERNAME
+                    and "AI Code Review" in (rev.get("body") or "")):
+                last_sha = rev.get("commit_id")
+                break
 
-        ... [DIFF TRUNCATED - exceeded ${MAX_DIFF_SIZE} character limit] ..."
-        fi
+        # ─── 3. Get diff ─────────────────────────────────────────────────
+        incremental = False
+        if last_sha:
+            print(f"  Previous review at {last_sha[:8]}. Diffing incremental...")
+            diff = gh("api", f"repos/{REPOSITORY}/compare/{last_sha}...{head_sha}",
+                      "--jq", '.files[]? | "diff --git a/" + .filename + " b/" + .filename + "\\n" + (.patch // "")')
+            if diff:
+                incremental = True
+            else:
+                print("  No new changes since last review. Skipping.")
+                out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
+        else:
+            print("  First review — full PR diff.")
+            diff = gh("pr", "diff", PR_NUMBER, "--repo", REPOSITORY)
 
-        # Build scope instructions
-        case "$REVIEW_SCOPE" in
-          bugs)
-            SCOPE_INSTRUCTIONS="Focus exclusively on identifying bugs, logic errors, edge cases, and potential runtime failures."
-            ;;
-          security)
-            SCOPE_INSTRUCTIONS="Focus exclusively on security vulnerabilities: injection attacks, authentication/authorization issues, data exposure, OWASP top 10, and unsafe patterns."
-            ;;
-          performance)
-            SCOPE_INSTRUCTIONS="Focus exclusively on performance issues: N+1 queries, unnecessary allocations, missing indexes, inefficient algorithms, and resource leaks."
-            ;;
-          style)
-            SCOPE_INSTRUCTIONS="Focus exclusively on code style, readability, naming conventions, and adherence to best practices."
-            ;;
-          all|*)
-            SCOPE_INSTRUCTIONS="Review for bugs, security vulnerabilities, performance issues, and code quality. Prioritize issues by severity."
-            ;;
-        esac
+        if not diff:
+            print("  Empty diff."); out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
 
-        SYSTEM_PROMPT="You are an expert code reviewer. You review pull request diffs and provide actionable inline feedback on specific lines.
+        print(f"  Diff: {len(diff)} chars (incremental={incremental})")
+        if len(diff) > MAX_DIFF_SIZE:
+            diff = diff[:MAX_DIFF_SIZE] + "\n\n... [DIFF TRUNCATED] ..."
 
-        Rules:
-        - Return ONLY a valid JSON object. No markdown, no explanation outside the JSON.
-        - Each comment must reference the exact file path and a line number from the ADDED side of the diff (lines starting with +).
-        - The line number must be the line number in the NEW file (right side of the diff), calculated from the @@ hunk headers.
-        - Only flag real issues. Do not pad the review with trivial observations.
-        - Be concise. Each comment body should be 1-3 sentences.
-        - Prefix each comment body with a severity tag: [CRITICAL], [WARNING], [SUGGESTION], or [NITPICK].
-        - If the code looks good and you have no issues to flag, return {\"summary\": \"Code looks good. No issues found.\", \"comments\": []}.
+        # ─── 4. Existing comments for dedup ───────────────────────────────
+        raw = gh("api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/comments", "--paginate")
+        existing = json.loads(raw) if raw else []
+        seen = set()
+        for c in existing:
+            if c.get("user", {}).get("login") == BOT_USERNAME:
+                seen.add(f"{c.get('path','')}:{c.get('line') or c.get('original_line') or 0}")
+        print(f"  {len(seen)} existing bot comments for dedup")
 
-        ${SCOPE_INSTRUCTIONS}
+        # ─── 5. Read repo context file ────────────────────────────────────
+        repo_context = ""
+        if CONTEXT_FILE and os.path.isfile(CONTEXT_FILE):
+            with open(CONTEXT_FILE) as f:
+                repo_context = f.read()
+            print(f"  Loaded context from {CONTEXT_FILE} ({len(repo_context)} chars)")
 
-        Response format:
-        {
-          \"summary\": \"Brief 1-2 sentence overall summary of the PR changes and review findings.\",
-          \"comments\": [
-            {
-              \"path\": \"relative/path/to/file.py\",
-              \"line\": 42,
-              \"body\": \"[SEVERITY] Your comment here.\"
-            }
-          ]
-        }"
+        # ─── 6. Build prompt ──────────────────────────────────────────────
+        # System prompt = REVIEW.md guidelines (Tilda-specific)
+        system_prompt = """You are a code review agent for Tilda, a biotech platform.
 
-        if [ -n "$CUSTOM_PROMPT" ]; then
-          SYSTEM_PROMPT="${SYSTEM_PROMPT}
+RULES — read these first:
+- Signal > volume. If unsure whether something is a real issue, do NOT comment.
+- Report ALL CRITICAL issues — no limit. For HIGH/MEDIUM, limit to """ + str(MAX_COMMENTS) + """ comments. Prioritize highest impact.
+- If a CRITICAL issue exists, report it first. Continue reviewing for other CRITICAL issues but skip non-critical observations.
+- Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
+- Each comment: file path + line number (from ADDED side, calculated from @@ hunk headers) + 1-4 line body with concrete fix.
+- Severity tags: [CRITICAL] must fix before merge, [HIGH] strongly recommended, [MEDIUM] improvement.
+- Do NOT use [LOW]. If it is not materially impactful, do not comment.
+- If no issues: return {"summary": "LGTM", "comments": []}
+- No summary paragraph. No praise. Only findings.
 
-        Additional instructions: ${CUSTOM_PROMPT}"
-        fi
+REPOSITORY CONTEXT:
+This is a monorepo with:
+- ~18 Go microservices (execsvc, docsvc, patientsvc, schedsvc, enrollsvc, studiosvc, finsvc, notifsvc, dslsvc, authz, dashQL, dashRsvc, regsvc, advpsvc, workplansvc, datasvc, payoutsvc, tusker)
+- Shared Go libraries (common/, tildadb/, tildaobj/, api/, tlang/, util/) — changes here affect many services
+- Python AI services under data-science/ (studioai, virtual_assistant, docproc, exportsvc) — LangChain, OpenAI, Neo4j, PubSub
+- Neo4j as primary database with Cypher queries
+- Google Cloud Pub/Sub for async messaging (at-least-once delivery — consumers must be idempotent)
+- GraphQL (gqlgen) in dashQL
+- GitHub Actions CI/CD
 
-        USER_PROMPT="Review this pull request and return inline comments as JSON.
+PR NECESSITY CHECK (do first):
+- Is this PR necessary? Could the goal be achieved simpler?
+- Does the diff include unrelated changes? Unnecessary abstractions?
+- Flag over-engineering before reviewing code details.
 
-        **Title:** ${PR_TITLE}
-        **Description:** ${PR_BODY}
-        **Branch:** ${HEAD_BRANCH} -> ${BASE_BRANCH}
+WHAT TO CHECK:
 
-        **Diff:**
-        \`\`\`diff
-        ${DIFF}
-        \`\`\`"
+1. Correctness: Logic errors, null dereferences, wrong variable, off-by-one, incorrect control flow
+2. Security: Hardcoded secrets, injection (SQL, Cypher, command, prompt), missing auth, PHI/PII exposure, insecure crypto
+3. Concurrency: Goroutines without context cancellation, unsafe concurrent map access, race conditions, blocking calls in goroutines
+4. Distributed reliability: Non-idempotent retries, at-least-once vs exactly-once confusion, missing partial failure handling, PubSub ack/nack errors silently swallowed
+5. Error handling: Silent except/pass, missing error handling on DB/API/message paths, ignored Go error returns, panics in production
+6. Data integrity: Messages dropped, partial writes without rollback, state corruption, Neo4j session/transaction not closed
+7. Breaking changes: Shared library changes without downstream consideration, API contract changes, schema changes breaking rolling deploys, removed fields callers depend on
+8. Performance: N+1 Cypher queries in loops, unbounded memory, missing pagination, full graph scans
+9. Cross-service impact: Changes to common/, tildaobj/, tildadb/ affect all services — increase severity by one level for shared code changes
 
-        echo "Sending diff to Claude (${MODEL}) for review..."
+GO-SPECIFIC:
+- Missing or ignored error returns
+- Goroutines without context cancellation
+- Unsafe concurrent map access
+- Panics in production paths
+- Neo4j session/transaction not closed
+- Cypher injection via string concatenation (must use parameterized queries)
+- Missing timeout on external calls
 
-        SYSTEM_FILE=$(mktemp)
-        USER_FILE=$(mktemp)
-        PAYLOAD_FILE=$(mktemp)
-        RESPONSE_FILE=$(mktemp)
-        trap 'rm -f "$SYSTEM_FILE" "$USER_FILE" "$PAYLOAD_FILE" "$RESPONSE_FILE"' EXIT
+PYTHON-SPECIFIC:
+- Blocking I/O inside async code
+- Silent exception swallowing (bare except/pass on critical paths)
+- User input concatenated into LLM prompts
+- LLM responses used without validation
+- Unbounded agent loops (missing max iterations)
+- Missing resource cleanup
 
-        printf '%s' "$SYSTEM_PROMPT" > "$SYSTEM_FILE"
-        printf '%s' "$USER_PROMPT" > "$USER_FILE"
+NEO4J/CYPHER:
+- Non-existent node labels or relationship types (verify against tildaobj/ if visible)
+- Relationships traversed in wrong direction
+- String concatenation instead of parameterized queries
+- Queries causing full graph scans (missing WHERE clause on indexed property)
 
-        jq -n \
-          --arg model "$MODEL" \
-          --arg system "$(cat "$SYSTEM_FILE")" \
-          --arg user "$(cat "$USER_FILE")" \
-          '{
-            model: $model,
-            max_tokens: 4096,
-            system: $system,
-            messages: [
-              {
-                role: "user",
-                content: $user
-              }
-            ]
-          }' > "$PAYLOAD_FILE"
+WHAT NOT TO CHECK:
+- Formatting, naming, import ordering, type hints
+- Missing docstrings or comments
+- "Consider using X instead of Y" suggestions
+- Hypothetical issues requiring full codebase context to verify
+- Non-critical optimizations
+- Alternative architectures
 
-        HTTP_STATUS=$(curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
-          -X POST "https://api.anthropic.com/v1/messages" \
-          -H "Content-Type: application/json" \
-          -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-          -H "anthropic-version: 2023-06-01" \
-          -d @"$PAYLOAD_FILE")
+Response format:
+{
+  "comments": [
+    {"path": "file.go", "line": 42, "body": "[CRITICAL] Description. Fix: ..."}
+  ]
+}"""
 
-        if [ "$HTTP_STATUS" -ne 200 ]; then
-          echo "::error::Claude API request failed with status $HTTP_STATUS"
-          cat "$RESPONSE_FILE"
-          echo "review_status=error" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
+        # Append repo-specific context if available
+        if repo_context:
+            system_prompt += "\n\nADDITIONAL REPO CONTEXT:\n" + repo_context
 
-        # Extract the text content from Claude response
-        REVIEW_JSON=$(jq -r '.content[0].text' "$RESPONSE_FILE")
+        if CUSTOM_PROMPT:
+            system_prompt += "\n\nADDITIONAL INSTRUCTIONS:\n" + CUSTOM_PROMPT
 
-        if [ -z "$REVIEW_JSON" ] || [ "$REVIEW_JSON" = "null" ]; then
-          echo "::error::Failed to extract review from Claude response"
-          cat "$RESPONSE_FILE"
-          echo "review_status=error" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
+        label = "incremental (new commits only)" if incremental else "full PR"
+        user_prompt = f"""Review this {label} diff. Return JSON only.
 
-        # Strip markdown code fences if Claude wrapped the JSON
-        REVIEW_JSON=$(echo "$REVIEW_JSON" | sed 's/^```json//;s/^```//;s/```$//' | sed '/^[[:space:]]*$/d')
+Title: {pr_title}
+Description: {pr_body}
+Branch: {head_branch} -> {base_branch}
 
-        # Validate it's valid JSON
-        if ! echo "$REVIEW_JSON" | jq . > /dev/null 2>&1; then
-          echo "::error::Claude returned invalid JSON"
-          echo "$REVIEW_JSON"
-          echo "review_status=error" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
+Diff:
+```diff
+{diff}
+```"""
 
-        # Save for next step
-        REVIEW_OUTPUT=$(mktemp)
-        echo "$REVIEW_JSON" > "$REVIEW_OUTPUT"
-        echo "review_file=$REVIEW_OUTPUT" >> "$GITHUB_OUTPUT"
-        echo "review_status=success" >> "$GITHUB_OUTPUT"
-
-        COMMENT_COUNT=$(echo "$REVIEW_JSON" | jq '.comments | length')
-        SUMMARY=$(echo "$REVIEW_JSON" | jq -r '.summary')
-        echo "Review generated: $COMMENT_COUNT inline comment(s)"
-        echo "Summary: $SUMMARY"
-
-    - name: Post inline review to PR
-      id: post-review
-      if: steps.ai-review.outputs.review_status == 'success'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.gh-token }}
-        PR_NUMBER: ${{ inputs.pr-number }}
-        REPOSITORY: ${{ inputs.repository }}
-        REVIEW_FILE: ${{ steps.ai-review.outputs.review_file }}
-      run: |
-        set -euo pipefail
-
-        REVIEW_JSON=$(cat "$REVIEW_FILE")
-        SUMMARY=$(echo "$REVIEW_JSON" | jq -r '.summary')
-        COMMENT_COUNT=$(echo "$REVIEW_JSON" | jq '.comments | length')
-
-        # Fetch the latest commit SHA on the PR (required by GitHub review API)
-        COMMIT_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json commits --jq '.commits[-1].oid')
-        echo "Latest commit: $COMMIT_SHA"
-
-        # Build the review body
-        REVIEW_BODY="## AI Code Review
-
-        ${SUMMARY}
-
-        ---
-        *${COMMENT_COUNT} inline comment(s) | Powered by Claude*"
-
-        if [ "$COMMENT_COUNT" -eq 0 ]; then
-          # No inline comments — just post the summary as a PR comment
-          COMMENT_FILE=$(mktemp)
-          trap 'rm -f "$COMMENT_FILE"' EXIT
-          printf '%s' "$REVIEW_BODY" > "$COMMENT_FILE"
-          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file "$COMMENT_FILE"
-          echo "Posted summary comment (no inline issues found)"
-          echo "review_status=success" >> "$GITHUB_OUTPUT"
-          echo "comments_posted=0" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # Build the review payload with inline comments
-        PAYLOAD_FILE=$(mktemp)
-        trap 'rm -f "$PAYLOAD_FILE"' EXIT
-
-        # Extract comments array and build the GitHub review API payload
-        echo "$REVIEW_JSON" | jq \
-          --arg sha "$COMMIT_SHA" \
-          --arg body "$REVIEW_BODY" \
-          '{
-            commit_id: $sha,
-            body: $body,
-            event: "COMMENT",
-            comments: [
-              .comments[] | {
-                path: .path,
-                line: .line,
-                side: "RIGHT",
-                body: .body
-              }
-            ]
-          }' > "$PAYLOAD_FILE"
-
-        echo "Posting review with $COMMENT_COUNT inline comment(s)..."
-
-        # Post the review with inline comments
-        RESPONSE=$(gh api \
-          --method POST \
-          -H "Accept: application/vnd.github+json" \
-          "/repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-          --input "$PAYLOAD_FILE" 2>&1) || {
-          echo "::warning::Failed to post review with inline comments. Falling back to summary comment."
-          echo "$RESPONSE"
-
-          # Fallback: post as regular comment with all findings
-          FALLBACK_FILE=$(mktemp)
-          {
-            printf '%s\n\n' "$REVIEW_BODY"
-            echo "$REVIEW_JSON" | jq -r '.comments[] | "**\(.path):\(.line)** — \(.body)\n"'
-          } > "$FALLBACK_FILE"
-          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file "$FALLBACK_FILE"
-          rm -f "$FALLBACK_FILE"
-          echo "review_status=success" >> "$GITHUB_OUTPUT"
-          echo "comments_posted=$COMMENT_COUNT" >> "$GITHUB_OUTPUT"
-          exit 0
+        # ─── 7. Call Claude ───────────────────────────────────────────────
+        print(f"Calling Claude ({MODEL})...")
+        payload = {
+            "model": MODEL,
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}]
         }
 
-        echo "Review posted successfully with $COMMENT_COUNT inline comment(s)"
-        echo "review_status=success" >> "$GITHUB_OUTPUT"
-        echo "comments_posted=$COMMENT_COUNT" >> "$GITHUB_OUTPUT"
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp_data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode() if e.fp else ""
+            print(f"::error::Claude API HTTP {e.code}: {body}")
+            out("review_status", "error"); out("comments_posted", "0"); sys.exit(1)
+
+        text = resp_data.get("content", [{}])[0].get("text", "")
+
+        # Strip code fences
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].strip() == "```": lines = lines[:-1]
+            text = "\n".join(lines)
+
+        try:
+            review = json.loads(text)
+        except json.JSONDecodeError:
+            print(f"::error::Invalid JSON from Claude:\n{text[:500]}")
+            out("review_status", "error"); out("comments_posted", "0"); sys.exit(1)
+
+        comments = review.get("comments", [])
+        print(f"  Claude returned {len(comments)} comment(s)")
+
+        # ─── 8. Filter: dedup, severity, cap ──────────────────────────────
+        filtered = []
+        skip_sev = 0
+        skip_dup = 0
+
+        for c in comments:
+            body = c.get("body", "")
+            path = c.get("path", "")
+            line = c.get("line", 0)
+
+            sev = "MEDIUM"
+            for s in SEVERITY_RANK:
+                if f"[{s}]" in body:
+                    sev = s; break
+
+            # Drop LOW
+            if SEVERITY_RANK.get(sev, 3) > 2:
+                skip_sev += 1; continue
+
+            # Dedup
+            if f"{path}:{line}" in seen:
+                skip_dup += 1; continue
+
+            filtered.append({"path": path, "line": line, "body": body, "_sev": sev})
+
+        filtered.sort(key=lambda x: SEVERITY_RANK.get(x["_sev"], 3))
+
+        # All CRITICALs always go through, cap only applies to HIGH/MEDIUM
+        criticals = [c for c in filtered if c["_sev"] == "CRITICAL"]
+        non_criticals = [c for c in filtered if c["_sev"] != "CRITICAL"]
+        capped_non_criticals = non_criticals[:MAX_COMMENTS]
+        final = criticals + capped_non_criticals
+        skipped_cap = max(0, len(non_criticals) - MAX_COMMENTS)
+
+        print(f"  Posting {len(final)} ({len(criticals)} CRITICAL uncapped + {len(capped_non_criticals)} HIGH/MEDIUM, skipped: {skip_sev} low-severity, {skip_dup} duplicates, {skipped_cap} over cap)")
+
+        # ─── 9. Post review ──────────────────────────────────────────────
+        label = "incremental" if incremental else "full"
+        sev_counts = {}
+        for c in final:
+            s = c["_sev"]; sev_counts[s] = sev_counts.get(s, 0) + 1
+        sev_line = ", ".join(f"{v} {k}" for k, v in sorted(sev_counts.items(), key=lambda x: SEVERITY_RANK.get(x[0], 3)))
+
+        body_text = f"## AI Code Review ({label})"
+        if sev_line:
+            body_text += f"\n\n{sev_line}"
+        if skip_dup:
+            body_text += f"\n\n_{skip_dup} duplicate(s) skipped_"
+        body_text += "\n\n---\n*Powered by Claude*"
+
+        if not final:
+            f = "/tmp/ai_review_lgtm.md"
+            with open(f, "w") as fh:
+                fh.write(f"## AI Code Review ({label})\n\nLGTM — no critical issues found.\n\n---\n*Powered by Claude*")
+            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", f)
+            print("  Posted LGTM")
+            out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
+
+        # Try batch post
+        payload = {
+            "commit_id": head_sha,
+            "body": body_text,
+            "event": "COMMENT",
+            "comments": [{"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]} for c in final]
+        }
+        pf = "/tmp/ai_review_payload.json"
+        with open(pf, "w") as f:
+            json.dump(payload, f)
+
+        r = subprocess.run(
+            ["gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json",
+             f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--input", pf],
+            capture_output=True, text=True, timeout=60
+        )
+
+        if r.returncode == 0:
+            print(f"  Posted {len(final)} inline comment(s)")
+            out("review_status", "success"); out("comments_posted", str(len(final))); sys.exit(0)
+
+        # Batch failed — post one by one, skip line mismatches
+        print(f"  Batch failed, posting individually...")
+        posted = 0
+        for i, c in enumerate(final):
+            sp = {"commit_id": head_sha, "body": body_text if i == 0 else "", "event": "COMMENT",
+                  "comments": [{"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]}]}
+            sf = f"/tmp/ai_review_{i}.json"
+            with open(sf, "w") as f:
+                json.dump(sp, f)
+            sr = subprocess.run(
+                ["gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json",
+                 f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--input", sf],
+                capture_output=True, text=True, timeout=30
+            )
+            if sr.returncode == 0:
+                posted += 1
+            else:
+                print(f"    Skipped {c['path']}:{c['line']} (line not in diff)")
+
+        print(f"  Posted {posted}/{len(final)}")
+        out("review_status", "success"); out("comments_posted", str(posted))
+
+        PYEOF
 
 branding:
   icon: 'eye'
