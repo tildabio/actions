@@ -108,25 +108,29 @@ runs:
         print(f"  {head_branch} -> {base_branch} ({len(commits)} commits, HEAD {head_sha[:8]})")
 
         # ─── 2. Check for previous AI review ─────────────────────────────
+        # Use issue comments (not review comments) to track last reviewed SHA.
+        # We embed <!-- ai-review-sha:XXXX --> in our comment body.
+        import re as _re
         print("Checking for previous AI reviews...")
-        raw = gh("api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/comments", "--paginate")
-        existing_comments = json.loads(raw) if raw else []
+        raw = gh("api", f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments", "--paginate")
+        issue_comments = json.loads(raw) if raw else []
 
-        # Find last reviewed commit from bot comments
         last_reviewed_sha = None
-        seen_lines = set()
-        for c in existing_comments:
+        for c in issue_comments:
             if c.get("user", {}).get("login") == BOT_USERNAME:
-                cid = c.get("commit_id")
-                if cid:
-                    last_reviewed_sha = cid
-                seen_lines.add(f"{c.get('path','')}:{c.get('line') or c.get('original_line') or 0}")
+                body = c.get("body", "")
+                m = _re.search(r'<!-- ai-review-sha:([a-f0-9]+) -->', body)
+                if m:
+                    last_reviewed_sha = m.group(1)
 
-        print(f"  {len(seen_lines)} existing bot comments, last reviewed: {last_reviewed_sha[:8] if last_reviewed_sha else 'none'}")
+        print(f"  Last reviewed SHA: {last_reviewed_sha[:8] if last_reviewed_sha else 'none'}, HEAD: {head_sha[:8]}")
 
         # ─── 3. Get diff ─────────────────────────────────────────────────
         incremental = False
-        if last_reviewed_sha and last_reviewed_sha != head_sha:
+        if last_reviewed_sha == head_sha:
+            print("  Already reviewed this commit. Skipping.")
+            out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
+        elif last_reviewed_sha:
             print(f"  Incremental diff: {last_reviewed_sha[:8]}..{head_sha[:8]}")
             diff = gh("api", f"repos/{REPOSITORY}/compare/{last_reviewed_sha}...{head_sha}",
                       "--jq", '.files[]? | "diff --git a/" + .filename + " b/" + .filename + "\\n" + (.patch // "")')
@@ -135,9 +139,6 @@ runs:
             else:
                 print("  No new changes since last review. Skipping.")
                 out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
-        elif last_reviewed_sha == head_sha:
-            print("  Already reviewed this commit. Skipping.")
-            out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
         else:
             print("  First review — full PR diff.")
             diff = gh("pr", "diff", PR_NUMBER, "--repo", REPOSITORY)
@@ -262,40 +263,36 @@ runs:
         comments = review.get("comments", [])
         print(f"  Claude returned {len(comments)} comment(s)")
 
-        # ─── 7. Dedup against existing bot comments ──────────────────────
-        final = []
-        for c in comments:
-            path = c.get("path", "")
-            line = c.get("line", 0)
-            if f"{path}:{line}" in seen_lines:
-                print(f"  Skipping duplicate: {path}:{line}")
-                continue
-            final.append(c)
-
-        print(f"  {len(final)} new comment(s) after dedup")
-
-        if not final:
+        # ─── 7. Post results ──────────────────────────────────────────────
+        # Single issue comment — no threads to resolve, no merge blockers.
+        # Embed SHA marker for incremental tracking on next push.
+        if not comments:
             print("  No critical issues found.")
+            cf = "/tmp/ai_review_comment.md"
+            with open(cf, "w") as f:
+                f.write(f"## AI Code Review\n\nNo critical issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
+            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
-        # ─── 8. Post single formatted PR comment ─────────────────────────
-        # Single issue comment (not review/inline) — no threads to resolve.
-        lines = ["## :rotating_light: AI Code Review\n"]
-        for i, c in enumerate(final, 1):
+        label = "new changes only" if incremental else "full diff"
+        lines = [f"## AI Code Review ({label})\n"]
+        for i, c in enumerate(comments, 1):
             path = c.get("path", "")
             line = c.get("line", 0)
             body = c.get("body", "")
-            lines.append(f"### {i}. `{path}:{line}`")
-            lines.append(f"{body}\n")
+            lines.append(f"**{i}. `{path}:{line}`**")
+            lines.append(f"> {body}\n")
 
+        lines.append(f"\n<!-- ai-review-sha:{head_sha} -->")
         comment_body = "\n".join(lines)
+
         cf = "/tmp/ai_review_comment.md"
         with open(cf, "w") as f:
             f.write(comment_body)
 
         gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
-        print(f"  Posted single comment with {len(final)} finding(s)")
-        out("review_status", "success"); out("comments_posted", str(len(final)))
+        print(f"  Posted comment with {len(comments)} finding(s)")
+        out("review_status", "success"); out("comments_posted", str(len(comments)))
 
         PYEOF
 
