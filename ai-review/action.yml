@@ -264,8 +264,8 @@ runs:
         print(f"  Claude returned {len(comments)} comment(s)")
 
         # ─── 7. Post results ──────────────────────────────────────────────
-        # Single issue comment — no threads to resolve, no merge blockers.
-        # Embed SHA marker for incremental tracking on next push.
+        # Post as PR review: summary body + inline comments on diff lines.
+        # Also post an issue comment with SHA marker for incremental tracking.
         if not comments:
             print("  No critical issues found.")
             cf = "/tmp/ai_review_comment.md"
@@ -274,25 +274,70 @@ runs:
             gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
+        # Build inline review comments for the diff
+        review_comments = []
+        for c in comments:
+            path = c.get("path", "")
+            line_num = c.get("line", 0)
+            body = c.get("body", "")
+            if path and line_num and body:
+                review_comments.append({
+                    "path": path,
+                    "line": int(line_num),
+                    "side": "RIGHT",
+                    "body": f"**CRITICAL:** {body}"
+                })
+
+        # Build formatted summary for the review body
         label = "new changes only" if incremental else "full diff"
-        lines = [f"## AI Code Review ({label})\n"]
+        summary_lines = [f"## AI Code Review ({label})\n"]
+        summary_lines.append(f"Found **{len(comments)}** critical issue(s):\n")
         for i, c in enumerate(comments, 1):
             path = c.get("path", "")
-            line = c.get("line", 0)
+            line_num = c.get("line", 0)
             body = c.get("body", "")
-            lines.append(f"**{i}. `{path}:{line}`**")
-            lines.append(f"> {body}\n")
+            summary_lines.append(f"**{i}.** [`{path}:{line_num}`](https://github.com/{REPOSITORY}/pull/{PR_NUMBER}/files#diff-{path})")
+            summary_lines.append(f"> {body}\n")
+        summary_body = "\n".join(summary_lines)
 
-        lines.append(f"\n<!-- ai-review-sha:{head_sha} -->")
-        comment_body = "\n".join(lines)
+        # Submit PR review with inline comments + summary body
+        review_payload = {
+            "body": summary_body,
+            "event": "COMMENT",
+            "commit_id": head_sha,
+            "comments": review_comments
+        }
 
-        cf = "/tmp/ai_review_comment.md"
-        with open(cf, "w") as f:
-            f.write(comment_body)
+        payload_file = "/tmp/ai_review_payload.json"
+        with open(payload_file, "w") as f:
+            json.dump(review_payload, f)
 
-        gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
-        print(f"  Posted comment with {len(comments)} finding(s)")
-        out("review_status", "success"); out("comments_posted", str(len(comments)))
+        result = subprocess.run(
+            ["gh", "api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews",
+             "--input", payload_file, "--method", "POST"],
+            capture_output=True, text=True, timeout=120, env={**os.environ}
+        )
+
+        if result.returncode != 0:
+            print(f"  Review API failed: {result.stderr[:500]}")
+            print("  Falling back to summary-only comment...")
+            cf = "/tmp/ai_review_comment.md"
+            with open(cf, "w") as f:
+                f.write(summary_body)
+            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
+
+            posted = len(comments)
+        else:
+            print(f"  Posted review with {len(review_comments)} inline comment(s) + summary")
+            posted = len(review_comments)
+
+        # Always post SHA tracker as issue comment for incremental tracking
+        sha_cf = "/tmp/ai_review_sha.md"
+        with open(sha_cf, "w") as f:
+            f.write(f"<!-- ai-review-sha:{head_sha} -->")
+        gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", sha_cf)
+
+        out("review_status", "success"); out("comments_posted", str(posted))
 
         PYEOF
 
