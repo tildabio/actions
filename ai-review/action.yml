@@ -281,7 +281,7 @@ runs:
             print("  No critical issues found.")
             cf = "/tmp/ai_review_comment.md"
             with open(cf, "w") as f:
-                f.write(f"## AI Code Review\n\nNo critical issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
+                f.write(f"No critical issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
             gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
@@ -316,9 +316,7 @@ runs:
                 })
 
         # Build formatted summary for the review body
-        label = "new changes only" if incremental else "full diff"
-        summary_lines = [f"## AI Code Review ({label})\n"]
-        summary_lines.append(f"Found **{len(comments)}** critical issue(s):\n")
+        summary_lines = [f"Found **{len(comments)}** critical issue(s):\n"]
         summary_lines.append("| | File | Issue |")
         summary_lines.append("|---|---|---|")
         for i, c in enumerate(comments, 1):
