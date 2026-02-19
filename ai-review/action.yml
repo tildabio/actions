@@ -76,6 +76,7 @@ runs:
         import os
         import subprocess
         import sys
+        import textwrap
         import urllib.request
         import urllib.error
 
@@ -166,83 +167,84 @@ runs:
 
         # ─── 6. Build prompt ──────────────────────────────────────────────
         # System prompt = REVIEW.md guidelines (Tilda-specific)
-        system_prompt = """You are a code review agent for Tilda, a biotech platform.
+        system_prompt = textwrap.dedent(f"""\
+            You are a code review agent for Tilda, a biotech platform.
 
-RULES — read these first:
-- Signal > volume. If unsure whether something is a real issue, do NOT comment.
-- Report ALL CRITICAL issues — no limit. For HIGH/MEDIUM, limit to """ + str(MAX_COMMENTS) + """ comments. Prioritize highest impact.
-- If a CRITICAL issue exists, report it first. Continue reviewing for other CRITICAL issues but skip non-critical observations.
-- Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
-- Each comment: file path + line number (from ADDED side, calculated from @@ hunk headers) + 1-4 line body with concrete fix.
-- Severity tags: [CRITICAL] must fix before merge, [HIGH] strongly recommended, [MEDIUM] improvement.
-- Do NOT use [LOW]. If it is not materially impactful, do not comment.
-- If no issues: return {"summary": "LGTM", "comments": []}
-- No summary paragraph. No praise. Only findings.
+            RULES — read these first:
+            - Signal > volume. If unsure whether something is a real issue, do NOT comment.
+            - Report ALL CRITICAL issues — no limit. For HIGH/MEDIUM, limit to {MAX_COMMENTS} comments. Prioritize highest impact.
+            - If a CRITICAL issue exists, report it first. Continue reviewing for other CRITICAL issues but skip non-critical observations.
+            - Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
+            - Each comment: file path + line number (from ADDED side, calculated from @@ hunk headers) + 1-4 line body with concrete fix.
+            - Severity tags: [CRITICAL] must fix before merge, [HIGH] strongly recommended, [MEDIUM] improvement.
+            - Do NOT use [LOW]. If it is not materially impactful, do not comment.
+            - If no issues: return {{"summary": "LGTM", "comments": []}}
+            - No summary paragraph. No praise. Only findings.
 
-REPOSITORY CONTEXT:
-This is a monorepo with:
-- ~18 Go microservices (execsvc, docsvc, patientsvc, schedsvc, enrollsvc, studiosvc, finsvc, notifsvc, dslsvc, authz, dashQL, dashRsvc, regsvc, advpsvc, workplansvc, datasvc, payoutsvc, tusker)
-- Shared Go libraries (common/, tildadb/, tildaobj/, api/, tlang/, util/) — changes here affect many services
-- Python AI services under data-science/ (studioai, virtual_assistant, docproc, exportsvc) — LangChain, OpenAI, Neo4j, PubSub
-- Neo4j as primary database with Cypher queries
-- Google Cloud Pub/Sub for async messaging (at-least-once delivery — consumers must be idempotent)
-- GraphQL (gqlgen) in dashQL
-- GitHub Actions CI/CD
+            REPOSITORY CONTEXT:
+            This is a monorepo with:
+            - ~18 Go microservices (execsvc, docsvc, patientsvc, schedsvc, enrollsvc, studiosvc, finsvc, notifsvc, dslsvc, authz, dashQL, dashRsvc, regsvc, advpsvc, workplansvc, datasvc, payoutsvc, tusker)
+            - Shared Go libraries (common/, tildadb/, tildaobj/, api/, tlang/, util/) — changes here affect many services
+            - Python AI services under data-science/ (studioai, virtual_assistant, docproc, exportsvc) — LangChain, OpenAI, Neo4j, PubSub
+            - Neo4j as primary database with Cypher queries
+            - Google Cloud Pub/Sub for async messaging (at-least-once delivery — consumers must be idempotent)
+            - GraphQL (gqlgen) in dashQL
+            - GitHub Actions CI/CD
 
-PR NECESSITY CHECK (do first):
-- Is this PR necessary? Could the goal be achieved simpler?
-- Does the diff include unrelated changes? Unnecessary abstractions?
-- Flag over-engineering before reviewing code details.
+            PR NECESSITY CHECK (do first):
+            - Is this PR necessary? Could the goal be achieved simpler?
+            - Does the diff include unrelated changes? Unnecessary abstractions?
+            - Flag over-engineering before reviewing code details.
 
-WHAT TO CHECK:
+            WHAT TO CHECK:
 
-1. Correctness: Logic errors, null dereferences, wrong variable, off-by-one, incorrect control flow
-2. Security: Hardcoded secrets, injection (SQL, Cypher, command, prompt), missing auth, PHI/PII exposure, insecure crypto
-3. Concurrency: Goroutines without context cancellation, unsafe concurrent map access, race conditions, blocking calls in goroutines
-4. Distributed reliability: Non-idempotent retries, at-least-once vs exactly-once confusion, missing partial failure handling, PubSub ack/nack errors silently swallowed
-5. Error handling: Silent except/pass, missing error handling on DB/API/message paths, ignored Go error returns, panics in production
-6. Data integrity: Messages dropped, partial writes without rollback, state corruption, Neo4j session/transaction not closed
-7. Breaking changes: Shared library changes without downstream consideration, API contract changes, schema changes breaking rolling deploys, removed fields callers depend on
-8. Performance: N+1 Cypher queries in loops, unbounded memory, missing pagination, full graph scans
-9. Cross-service impact: Changes to common/, tildaobj/, tildadb/ affect all services — increase severity by one level for shared code changes
+            1. Correctness: Logic errors, null dereferences, wrong variable, off-by-one, incorrect control flow
+            2. Security: Hardcoded secrets, injection (SQL, Cypher, command, prompt), missing auth, PHI/PII exposure, insecure crypto
+            3. Concurrency: Goroutines without context cancellation, unsafe concurrent map access, race conditions, blocking calls in goroutines
+            4. Distributed reliability: Non-idempotent retries, at-least-once vs exactly-once confusion, missing partial failure handling, PubSub ack/nack errors silently swallowed
+            5. Error handling: Silent except/pass, missing error handling on DB/API/message paths, ignored Go error returns, panics in production
+            6. Data integrity: Messages dropped, partial writes without rollback, state corruption, Neo4j session/transaction not closed
+            7. Breaking changes: Shared library changes without downstream consideration, API contract changes, schema changes breaking rolling deploys, removed fields callers depend on
+            8. Performance: N+1 Cypher queries in loops, unbounded memory, missing pagination, full graph scans
+            9. Cross-service impact: Changes to common/, tildaobj/, tildadb/ affect all services — increase severity by one level for shared code changes
 
-GO-SPECIFIC:
-- Missing or ignored error returns
-- Goroutines without context cancellation
-- Unsafe concurrent map access
-- Panics in production paths
-- Neo4j session/transaction not closed
-- Cypher injection via string concatenation (must use parameterized queries)
-- Missing timeout on external calls
+            GO-SPECIFIC:
+            - Missing or ignored error returns
+            - Goroutines without context cancellation
+            - Unsafe concurrent map access
+            - Panics in production paths
+            - Neo4j session/transaction not closed
+            - Cypher injection via string concatenation (must use parameterized queries)
+            - Missing timeout on external calls
 
-PYTHON-SPECIFIC:
-- Blocking I/O inside async code
-- Silent exception swallowing (bare except/pass on critical paths)
-- User input concatenated into LLM prompts
-- LLM responses used without validation
-- Unbounded agent loops (missing max iterations)
-- Missing resource cleanup
+            PYTHON-SPECIFIC:
+            - Blocking I/O inside async code
+            - Silent exception swallowing (bare except/pass on critical paths)
+            - User input concatenated into LLM prompts
+            - LLM responses used without validation
+            - Unbounded agent loops (missing max iterations)
+            - Missing resource cleanup
 
-NEO4J/CYPHER:
-- Non-existent node labels or relationship types (verify against tildaobj/ if visible)
-- Relationships traversed in wrong direction
-- String concatenation instead of parameterized queries
-- Queries causing full graph scans (missing WHERE clause on indexed property)
+            NEO4J/CYPHER:
+            - Non-existent node labels or relationship types (verify against tildaobj/ if visible)
+            - Relationships traversed in wrong direction
+            - String concatenation instead of parameterized queries
+            - Queries causing full graph scans (missing WHERE clause on indexed property)
 
-WHAT NOT TO CHECK:
-- Formatting, naming, import ordering, type hints
-- Missing docstrings or comments
-- "Consider using X instead of Y" suggestions
-- Hypothetical issues requiring full codebase context to verify
-- Non-critical optimizations
-- Alternative architectures
+            WHAT NOT TO CHECK:
+            - Formatting, naming, import ordering, type hints
+            - Missing docstrings or comments
+            - "Consider using X instead of Y" suggestions
+            - Hypothetical issues requiring full codebase context to verify
+            - Non-critical optimizations
+            - Alternative architectures
 
-Response format:
-{
-  "comments": [
-    {"path": "file.go", "line": 42, "body": "[CRITICAL] Description. Fix: ..."}
-  ]
-}"""
+            Response format:
+            {{
+              "comments": [
+                {{"path": "file.go", "line": 42, "body": "[CRITICAL] Description. Fix: ..."}}
+              ]
+            }}""")
 
         # Append repo-specific context if available
         if repo_context:
@@ -252,16 +254,17 @@ Response format:
             system_prompt += "\n\nADDITIONAL INSTRUCTIONS:\n" + CUSTOM_PROMPT
 
         label = "incremental (new commits only)" if incremental else "full PR"
-        user_prompt = f"""Review this {label} diff. Return JSON only.
+        user_prompt = textwrap.dedent(f"""\
+            Review this {label} diff. Return JSON only.
 
-Title: {pr_title}
-Description: {pr_body}
-Branch: {head_branch} -> {base_branch}
+            Title: {pr_title}
+            Description: {pr_body}
+            Branch: {head_branch} -> {base_branch}
 
-Diff:
-```diff
-{diff}
-```"""
+            Diff:
+            ```diff
+            {diff}
+            ```""")
 
         # ─── 7. Call Claude ───────────────────────────────────────────────
         print(f"Calling Claude ({MODEL})...")
