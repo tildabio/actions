@@ -191,12 +191,23 @@ runs:
             - Import ordering, unused imports
             - Commented-out code
 
-            Response format:
+            Response format — each comment MUST have these 4 fields:
             {
               "comments": [
-                {"path": "file.go", "line": 42, "body": "Description of the critical issue and how to fix it."}
+                {
+                  "path": "src/api/helpers.py",
+                  "line": 42,
+                  "category": "Security|Data Loss|Reliability|Injection|Credentials",
+                  "body": "One sentence describing the problem. Keep it under 20 words."
+                }
               ]
-            }""")
+            }
+
+            IMPORTANT:
+            - "category" must be one of: Security, Data Loss, Reliability, Injection, Credentials
+            - "body" must be ONE short sentence — the problem only, no fix suggestion, no preamble
+            - Do NOT prefix body with "CRITICAL:" or any label — the category field handles that
+            - Do NOT write paragraphs — one sentence max""")
 
         if repo_context:
             system_prompt += "\n\nREPO CONTEXT:\n" + repo_context
@@ -274,30 +285,49 @@ runs:
             gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
+        # Category emoji mapping
+        CAT_EMOJI = {
+            "security": "\U0001f6e1\ufe0f",
+            "injection": "\U0001f489",
+            "credentials": "\U0001f511",
+            "data loss": "\U0001f4a5",
+            "reliability": "\u26a0\ufe0f",
+        }
+
+        def fmt_category(cat):
+            key = (cat or "").lower()
+            emoji = CAT_EMOJI.get(key, "\U0001f534")
+            return f"{emoji} {cat}"
+
         # Build inline review comments for the diff
         review_comments = []
         for c in comments:
             path = c.get("path", "")
             line_num = c.get("line", 0)
             body = c.get("body", "")
+            cat = c.get("category", "Security")
             if path and line_num and body:
+                inline_body = f"{fmt_category(cat)}\n\n{body}"
                 review_comments.append({
                     "path": path,
                     "line": int(line_num),
                     "side": "RIGHT",
-                    "body": f"**CRITICAL:** {body}"
+                    "body": inline_body
                 })
 
         # Build formatted summary for the review body
         label = "new changes only" if incremental else "full diff"
         summary_lines = [f"## AI Code Review ({label})\n"]
         summary_lines.append(f"Found **{len(comments)}** critical issue(s):\n")
+        summary_lines.append("| | File | Issue |")
+        summary_lines.append("|---|---|---|")
         for i, c in enumerate(comments, 1):
             path = c.get("path", "")
             line_num = c.get("line", 0)
-            body = c.get("body", "")
-            summary_lines.append(f"**{i}.** [`{path}:{line_num}`](https://github.com/{REPOSITORY}/pull/{PR_NUMBER}/files#diff-{path})")
-            summary_lines.append(f"> {body}\n")
+            body = c.get("body", "").replace("|", "\\|")
+            cat = c.get("category", "Security")
+            short_path = path.split("/")[-1] if "/" in path else path
+            summary_lines.append(f"| {fmt_category(cat)} | `{short_path}:{line_num}` | {body} |")
         summary_body = "\n".join(summary_lines)
 
         # Submit PR review with inline comments + summary body
