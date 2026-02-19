@@ -278,40 +278,24 @@ runs:
             print("  No critical issues found.")
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
-        # ─── 8. Post as individual line comments (not review threads) ────
-        # Using pull request comments API (not reviews API) so comments
-        # don't create "conversations" that block merging.
-        posted = 0
-        for c in final:
+        # ─── 8. Post single formatted PR comment ─────────────────────────
+        # Single issue comment (not review/inline) — no threads to resolve.
+        lines = ["## :rotating_light: AI Code Review\n"]
+        for i, c in enumerate(final, 1):
             path = c.get("path", "")
             line = c.get("line", 0)
             body = c.get("body", "")
+            lines.append(f"### {i}. `{path}:{line}`")
+            lines.append(f"{body}\n")
 
-            comment_payload = {
-                "body": body,
-                "commit_id": head_sha,
-                "path": path,
-                "line": line,
-                "side": "RIGHT"
-            }
-            cf = f"/tmp/ai_comment_{posted}.json"
-            with open(cf, "w") as f:
-                json.dump(comment_payload, f)
+        comment_body = "\n".join(lines)
+        cf = "/tmp/ai_review_comment.md"
+        with open(cf, "w") as f:
+            f.write(comment_body)
 
-            r = subprocess.run(
-                ["gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json",
-                 f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/comments", "--input", cf],
-                capture_output=True, text=True, timeout=30
-            )
-
-            if r.returncode == 0:
-                posted += 1
-                print(f"  Posted: {path}:{line}")
-            else:
-                print(f"  Failed: {path}:{line} — {r.stderr[:200]}")
-
-        print(f"  Posted {posted}/{len(final)} comments")
-        out("review_status", "success"); out("comments_posted", str(posted))
+        gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
+        print(f"  Posted single comment with {len(final)} finding(s)")
+        out("review_status", "success"); out("comments_posted", str(len(final)))
 
         PYEOF
 
