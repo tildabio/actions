@@ -1,5 +1,5 @@
 name: 'AI Code Review'
-description: 'AI code review on pull requests using Claude — CRITICAL issues only, inline comments, incremental on sync'
+description: 'AI code review on pull requests using Claude — policy-driven via repo REVIEW.md, inline comments, incremental on sync'
 author: 'Tilda Bio'
 
 inputs:
@@ -24,11 +24,10 @@ inputs:
     required: false
     default: '100000'
   context-file:
-    description: 'Path to a repo-specific context file (e.g. .github/AI_CONTEXT.md). Requires checkout.'
-    required: false
-    default: ''
-  custom-prompt:
-    description: 'Additional instructions appended to the review prompt'
+    description: 'Path to repo REVIEW.md that defines review policy (severities, categories, rules). Requires checkout.'
+    required: true
+  repo-context:
+    description: 'Path to repo context file (e.g. AI_CONTEXT.md) with architecture details. Requires checkout.'
     required: false
     default: ''
   bot-username:
@@ -63,7 +62,7 @@ runs:
         MODEL: ${{ inputs.model }}
         MAX_DIFF_SIZE: ${{ inputs.max-diff-size }}
         CONTEXT_FILE: ${{ inputs.context-file }}
-        CUSTOM_PROMPT: ${{ inputs.custom-prompt }}
+        REPO_CONTEXT: ${{ inputs.repo-context }}
         BOT_USERNAME: ${{ inputs.bot-username }}
       run: |
         python3 << 'PYEOF'
@@ -80,8 +79,8 @@ runs:
         REPOSITORY     = os.environ["REPOSITORY"]
         MODEL          = os.environ["MODEL"]
         MAX_DIFF_SIZE  = int(os.environ["MAX_DIFF_SIZE"])
-        CONTEXT_FILE   = os.environ.get("CONTEXT_FILE", "")
-        CUSTOM_PROMPT  = os.environ.get("CUSTOM_PROMPT", "")
+        CONTEXT_FILE   = os.environ["CONTEXT_FILE"]
+        REPO_CONTEXT   = os.environ.get("REPO_CONTEXT", "")
         BOT_USERNAME   = os.environ.get("BOT_USERNAME", "ojasgo")
         ANTHROPIC_KEY  = os.environ["ANTHROPIC_API_KEY"]
 
@@ -150,74 +149,53 @@ runs:
         if len(diff) > MAX_DIFF_SIZE:
             diff = diff[:MAX_DIFF_SIZE] + "\n\n... [DIFF TRUNCATED] ..."
 
-        # ─── 4. Read repo context file ────────────────────────────────────
-        repo_context = ""
-        if CONTEXT_FILE and os.path.isfile(CONTEXT_FILE):
-            with open(CONTEXT_FILE) as f:
-                repo_context = f.read()
-            print(f"  Loaded context from {CONTEXT_FILE} ({len(repo_context)} chars)")
+        # ─── 4. Read REVIEW.md ──────────────────────────────────────────
+        if not CONTEXT_FILE or not os.path.isfile(CONTEXT_FILE):
+            print(f"::error::context-file not found: '{CONTEXT_FILE}'. Each repo must provide a REVIEW.md.")
+            out("review_status", "error"); out("comments_posted", "0"); sys.exit(1)
+
+        with open(CONTEXT_FILE) as f:
+            review_policy = f.read()
+        print(f"  Loaded review policy from {CONTEXT_FILE} ({len(review_policy)} chars)")
+
+        repo_architecture = ""
+        if REPO_CONTEXT and os.path.isfile(REPO_CONTEXT):
+            with open(REPO_CONTEXT) as f:
+                repo_architecture = f.read()
+            print(f"  Loaded repo context from {REPO_CONTEXT} ({len(repo_architecture)} chars)")
 
         # ─── 5. Build prompt ──────────────────────────────────────────────
         system_prompt = textwrap.dedent("""\
-            You are a senior code reviewer. You ONLY report CRITICAL issues — bugs, security vulnerabilities, data loss, and crashes that MUST be fixed before merge.
+            You are a senior code reviewer.
 
-            RULES:
-            - ONLY comment on issues that will cause bugs, security holes, data loss, or crashes in production.
-            - Do NOT comment on style, naming, formatting, missing docs, type hints, or import ordering.
-            - Do NOT suggest alternatives, improvements, or "consider doing X".
-            - Do NOT comment on things that require full codebase context to verify.
-            - Do NOT nitpick. If you are not 90%+ confident it is a real production issue, do NOT comment.
-            - If no critical issues: return {"comments": []}
+            RESPONSE FORMAT:
             - Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
-
-            WHAT IS CRITICAL:
-            - Hardcoded secrets/passwords/API keys
-            - Injection vulnerabilities (SQL, Cypher, command, prompt)
-            - Silent exception swallowing on critical paths (data loss)
-            - Command injection via shell=True or os.system with user input
-            - Missing timeout on external calls (can hang forever)
-            - PubSub messages ACKed before processing (data loss)
-            - Removed safety checks (validation, bounds, cleanup) without replacement
-            - Race conditions that cause data corruption
-            - Breaking changes to shared libraries without downstream updates
-
-            WHAT IS NOT CRITICAL (do NOT comment):
-            - Code style, naming conventions, formatting
-            - Missing error logging (unless it hides data loss)
-            - "Consider using X" suggestions
-            - Hypothetical issues
-            - Performance unless it causes OOM or timeout
-            - Missing tests
-            - Import ordering, unused imports
-            - Commented-out code
-
-            Response format — each comment MUST have these 4 fields:
+            - If no issues worth reporting: return {"comments": []}
+            - Each comment MUST have these 4 fields:
             {
               "comments": [
                 {
                   "path": "src/api/helpers.py",
                   "line": 42,
-                  "category": "Security|Data Loss|Reliability|Injection|Credentials",
-                  "body": "One sentence describing the problem. Keep it under 20 words."
+                  "category": "free-form string — use the severity or category from the review guidelines",
+                  "body": "Concise description of the problem (1-4 lines). No fix suggestion, no preamble."
                 }
               ]
             }
 
             IMPORTANT:
-            - "category" must be one of: Security, Data Loss, Reliability, Injection, Credentials
-            - "body" must be ONE short sentence — the problem only, no fix suggestion, no preamble
-            - Do NOT prefix body with "CRITICAL:" or any label — the category field handles that
-            - Do NOT write paragraphs — one sentence max""")
+            - "category" is a free-form string — use whatever severity level or category name the review guidelines specify
+            - "body" should be concise (1-4 lines) — describe the problem only, no fix suggestion, no preamble
+            - Do NOT prefix body with the category label — the category field handles that""")
 
-        if repo_context:
-            system_prompt += "\n\nREPO CONTEXT:\n" + repo_context
+        system_prompt += "\n\nREVIEW GUIDELINES (follow these as your primary review policy):\n" + review_policy
 
-        if CUSTOM_PROMPT:
-            system_prompt += "\n\nADDITIONAL INSTRUCTIONS:\n" + CUSTOM_PROMPT
+        if repo_architecture:
+            system_prompt += "\n\nREPOSITORY ARCHITECTURE (use this to understand the codebase):\n" + repo_architecture
 
         label = "incremental (new commits only)" if incremental else "full PR"
         user_prompt = textwrap.dedent(f"""\
-            Review this {label} diff. Return JSON only. Only CRITICAL issues.
+            Review this {label} diff. Return JSON only. Follow the review guidelines.
 
             Title: {pr_title}
             Description: {pr_body}
@@ -278,20 +256,40 @@ runs:
         # Post as PR review: summary body + inline comments on diff lines.
         # Also post an issue comment with SHA marker for incremental tracking.
         if not comments:
-            print("  No critical issues found.")
+            print("  No issues found.")
             cf = "/tmp/ai_review_comment.md"
             with open(cf, "w") as f:
-                f.write(f"No critical issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
+                f.write(f"No issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
             gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
         # Category emoji mapping
         CAT_EMOJI = {
+            # Severity levels
+            "critical": "\U0001f6d1",
+            "high": "\U0001f534",
+            "medium": "\U0001f7e0",
+            "low": "\U0001f7e1",
+            # Original categories
             "security": "\U0001f6e1\ufe0f",
             "injection": "\U0001f489",
             "credentials": "\U0001f511",
             "data loss": "\U0001f4a5",
             "reliability": "\u26a0\ufe0f",
+            # REVIEW.md categories
+            "concurrency": "\U0001f500",
+            "performance": "\u26a1",
+            "design": "\U0001f4d0",
+            "go-specific": "\U0001f439",
+            "python/ai": "\U0001f40d",
+            "neo4j/cypher": "\U0001f4c0",
+            "database/migration": "\U0001f5c4\ufe0f",
+            "k8s": "\u2638\ufe0f",
+            "test coverage": "\U0001f9ea",
+            "monorepo/cross-service": "\U0001f517",
+            "breaking change": "\U0001f4a3",
+            "correctness": "\u2705",
+            "error handling": "\U0001f6a8",
         }
 
         def fmt_category(cat):
@@ -305,7 +303,7 @@ runs:
             path = c.get("path", "")
             line_num = c.get("line", 0)
             body = c.get("body", "")
-            cat = c.get("category", "Security")
+            cat = c.get("category", "")
             if path and line_num and body:
                 inline_body = f"{fmt_category(cat)}\n\n{body}"
                 review_comments.append({
@@ -316,14 +314,14 @@ runs:
                 })
 
         # Build formatted summary for the review body
-        summary_lines = [f"Found **{len(comments)}** critical issue(s):\n"]
+        summary_lines = [f"Found **{len(comments)}** issue(s):\n"]
         summary_lines.append("| | File | Issue |")
         summary_lines.append("|---|---|---|")
         for i, c in enumerate(comments, 1):
             path = c.get("path", "")
             line_num = c.get("line", 0)
             body = c.get("body", "").replace("|", "\\|")
-            cat = c.get("category", "Security")
+            cat = c.get("category", "")
             short_path = path.split("/")[-1] if "/" in path else path
             summary_lines.append(f"| {fmt_category(cat)} | `{short_path}:{line_num}` | {body} |")
         summary_body = "\n".join(summary_lines)
