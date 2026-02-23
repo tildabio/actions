@@ -1,5 +1,5 @@
 name: 'AI Code Review'
-description: 'AI code review on pull requests using Claude — inline, incremental, deduplicated, Tilda-specific'
+description: 'AI code review on pull requests using Claude — policy-driven via repo REVIEW.md, inline comments, incremental on sync'
 author: 'Tilda Bio'
 
 inputs:
@@ -23,16 +23,11 @@ inputs:
     description: 'Maximum diff size in characters (to control token usage)'
     required: false
     default: '100000'
-  max-comments:
-    description: 'Maximum inline comments per review'
-    required: false
-    default: '5'
   context-file:
-    description: 'Path to a repo-specific context file (e.g. .github/AI_CONTEXT.md). Requires checkout.'
-    required: false
-    default: ''
-  custom-prompt:
-    description: 'Additional instructions appended to the review prompt'
+    description: 'Path to repo REVIEW.md that defines review policy (severities, categories, rules). Requires checkout.'
+    required: true
+  repo-context:
+    description: 'Path to repo context file (e.g. AI_CONTEXT.md) with architecture details. Requires checkout.'
     required: false
     default: ''
   bot-username:
@@ -45,7 +40,7 @@ outputs:
     description: 'Status of the review (success, skipped, error)'
     value: ${{ steps.run-review.outputs.review_status }}
   comments-posted:
-    description: 'Number of inline comments posted'
+    description: 'Number of comments posted'
     value: ${{ steps.run-review.outputs.comments_posted }}
 
 runs:
@@ -66,9 +61,8 @@ runs:
         REPOSITORY: ${{ inputs.repository }}
         MODEL: ${{ inputs.model }}
         MAX_DIFF_SIZE: ${{ inputs.max-diff-size }}
-        MAX_COMMENTS: ${{ inputs.max-comments }}
         CONTEXT_FILE: ${{ inputs.context-file }}
-        CUSTOM_PROMPT: ${{ inputs.custom-prompt }}
+        REPO_CONTEXT: ${{ inputs.repo-context }}
         BOT_USERNAME: ${{ inputs.bot-username }}
       run: |
         python3 << 'PYEOF'
@@ -76,6 +70,7 @@ runs:
         import os
         import subprocess
         import sys
+        import textwrap
         import urllib.request
         import urllib.error
 
@@ -84,13 +79,10 @@ runs:
         REPOSITORY     = os.environ["REPOSITORY"]
         MODEL          = os.environ["MODEL"]
         MAX_DIFF_SIZE  = int(os.environ["MAX_DIFF_SIZE"])
-        MAX_COMMENTS   = int(os.environ["MAX_COMMENTS"])
-        CONTEXT_FILE   = os.environ.get("CONTEXT_FILE", "")
-        CUSTOM_PROMPT  = os.environ.get("CUSTOM_PROMPT", "")
+        CONTEXT_FILE   = os.environ["CONTEXT_FILE"]
+        REPO_CONTEXT   = os.environ.get("REPO_CONTEXT", "")
         BOT_USERNAME   = os.environ.get("BOT_USERNAME", "ojasgo")
         ANTHROPIC_KEY  = os.environ["ANTHROPIC_API_KEY"]
-
-        SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
         def gh(*args):
             r = subprocess.run(["gh"] + list(args), capture_output=True, text=True, timeout=120)
@@ -114,23 +106,32 @@ runs:
         head_sha    = commits[-1]["oid"] if commits else ""
         print(f"  {head_branch} -> {base_branch} ({len(commits)} commits, HEAD {head_sha[:8]})")
 
-        # ─── 2. Incremental: find last AI review commit ──────────────────
+        # ─── 2. Check for previous AI review ─────────────────────────────
+        # Use issue comments (not review comments) to track last reviewed SHA.
+        # We embed <!-- ai-review-sha:XXXX --> in our comment body.
+        import re as _re
         print("Checking for previous AI reviews...")
-        raw = gh("api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--paginate")
-        reviews = json.loads(raw) if raw else []
+        raw = gh("api", f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments", "--paginate")
+        issue_comments = json.loads(raw) if raw else []
 
-        last_sha = None
-        for rev in reversed(reviews):
-            if (rev.get("user", {}).get("login") == BOT_USERNAME
-                    and "AI Code Review" in (rev.get("body") or "")):
-                last_sha = rev.get("commit_id")
-                break
+        last_reviewed_sha = None
+        for c in issue_comments:
+            if c.get("user", {}).get("login") == BOT_USERNAME:
+                body = c.get("body", "")
+                m = _re.search(r'<!-- ai-review-sha:([a-f0-9]+) -->', body)
+                if m:
+                    last_reviewed_sha = m.group(1)
+
+        print(f"  Last reviewed SHA: {last_reviewed_sha[:8] if last_reviewed_sha else 'none'}, HEAD: {head_sha[:8]}")
 
         # ─── 3. Get diff ─────────────────────────────────────────────────
         incremental = False
-        if last_sha:
-            print(f"  Previous review at {last_sha[:8]}. Diffing incremental...")
-            diff = gh("api", f"repos/{REPOSITORY}/compare/{last_sha}...{head_sha}",
+        if last_reviewed_sha == head_sha:
+            print("  Already reviewed this commit. Skipping.")
+            out("review_status", "skipped"); out("comments_posted", "0"); sys.exit(0)
+        elif last_reviewed_sha:
+            print(f"  Incremental diff: {last_reviewed_sha[:8]}..{head_sha[:8]}")
+            diff = gh("api", f"repos/{REPOSITORY}/compare/{last_reviewed_sha}...{head_sha}",
                       "--jq", '.files[]? | "diff --git a/" + .filename + " b/" + .filename + "\\n" + (.patch // "")')
             if diff:
                 incremental = True
@@ -148,122 +149,64 @@ runs:
         if len(diff) > MAX_DIFF_SIZE:
             diff = diff[:MAX_DIFF_SIZE] + "\n\n... [DIFF TRUNCATED] ..."
 
-        # ─── 4. Existing comments for dedup ───────────────────────────────
-        raw = gh("api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/comments", "--paginate")
-        existing = json.loads(raw) if raw else []
-        seen = set()
-        for c in existing:
-            if c.get("user", {}).get("login") == BOT_USERNAME:
-                seen.add(f"{c.get('path','')}:{c.get('line') or c.get('original_line') or 0}")
-        print(f"  {len(seen)} existing bot comments for dedup")
+        # ─── 4. Read REVIEW.md ──────────────────────────────────────────
+        if not CONTEXT_FILE or not os.path.isfile(CONTEXT_FILE):
+            print(f"::error::context-file not found: '{CONTEXT_FILE}'. Each repo must provide a REVIEW.md.")
+            out("review_status", "error"); out("comments_posted", "0"); sys.exit(1)
 
-        # ─── 5. Read repo context file ────────────────────────────────────
-        repo_context = ""
-        if CONTEXT_FILE and os.path.isfile(CONTEXT_FILE):
-            with open(CONTEXT_FILE) as f:
-                repo_context = f.read()
-            print(f"  Loaded context from {CONTEXT_FILE} ({len(repo_context)} chars)")
+        with open(CONTEXT_FILE) as f:
+            review_policy = f.read()
+        print(f"  Loaded review policy from {CONTEXT_FILE} ({len(review_policy)} chars)")
 
-        # ─── 6. Build prompt ──────────────────────────────────────────────
-        # System prompt = REVIEW.md guidelines (Tilda-specific)
-        system_prompt = """You are a code review agent for Tilda, a biotech platform.
+        repo_architecture = ""
+        if REPO_CONTEXT and os.path.isfile(REPO_CONTEXT):
+            with open(REPO_CONTEXT) as f:
+                repo_architecture = f.read()
+            print(f"  Loaded repo context from {REPO_CONTEXT} ({len(repo_architecture)} chars)")
 
-RULES — read these first:
-- Signal > volume. If unsure whether something is a real issue, do NOT comment.
-- Report ALL CRITICAL issues — no limit. For HIGH/MEDIUM, limit to """ + str(MAX_COMMENTS) + """ comments. Prioritize highest impact.
-- If a CRITICAL issue exists, report it first. Continue reviewing for other CRITICAL issues but skip non-critical observations.
-- Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
-- Each comment: file path + line number (from ADDED side, calculated from @@ hunk headers) + 1-4 line body with concrete fix.
-- Severity tags: [CRITICAL] must fix before merge, [HIGH] strongly recommended, [MEDIUM] improvement.
-- Do NOT use [LOW]. If it is not materially impactful, do not comment.
-- If no issues: return {"summary": "LGTM", "comments": []}
-- No summary paragraph. No praise. Only findings.
+        # ─── 5. Build prompt ──────────────────────────────────────────────
+        system_prompt = textwrap.dedent("""\
+            You are a senior code reviewer.
 
-REPOSITORY CONTEXT:
-This is a monorepo with:
-- ~18 Go microservices (execsvc, docsvc, patientsvc, schedsvc, enrollsvc, studiosvc, finsvc, notifsvc, dslsvc, authz, dashQL, dashRsvc, regsvc, advpsvc, workplansvc, datasvc, payoutsvc, tusker)
-- Shared Go libraries (common/, tildadb/, tildaobj/, api/, tlang/, util/) — changes here affect many services
-- Python AI services under data-science/ (studioai, virtual_assistant, docproc, exportsvc) — LangChain, OpenAI, Neo4j, PubSub
-- Neo4j as primary database with Cypher queries
-- Google Cloud Pub/Sub for async messaging (at-least-once delivery — consumers must be idempotent)
-- GraphQL (gqlgen) in dashQL
-- GitHub Actions CI/CD
+            RESPONSE FORMAT:
+            - Return ONLY valid JSON. No markdown fences, no explanation outside JSON.
+            - If no issues worth reporting: return {"comments": []}
+            - Each comment MUST have these 4 fields:
+            {
+              "comments": [
+                {
+                  "path": "src/api/helpers.py",
+                  "line": 42,
+                  "category": "free-form string — use the severity or category from the review guidelines",
+                  "body": "Concise description of the problem (1-4 lines). No fix suggestion, no preamble."
+                }
+              ]
+            }
 
-PR NECESSITY CHECK (do first):
-- Is this PR necessary? Could the goal be achieved simpler?
-- Does the diff include unrelated changes? Unnecessary abstractions?
-- Flag over-engineering before reviewing code details.
+            IMPORTANT:
+            - "category" is a free-form string — use whatever severity level or category name the review guidelines specify
+            - "body" should be concise (1-4 lines) — describe the problem only, no fix suggestion, no preamble
+            - Do NOT prefix body with the category label — the category field handles that""")
 
-WHAT TO CHECK:
+        system_prompt += "\n\nREVIEW GUIDELINES (follow these as your primary review policy):\n" + review_policy
 
-1. Correctness: Logic errors, null dereferences, wrong variable, off-by-one, incorrect control flow
-2. Security: Hardcoded secrets, injection (SQL, Cypher, command, prompt), missing auth, PHI/PII exposure, insecure crypto
-3. Concurrency: Goroutines without context cancellation, unsafe concurrent map access, race conditions, blocking calls in goroutines
-4. Distributed reliability: Non-idempotent retries, at-least-once vs exactly-once confusion, missing partial failure handling, PubSub ack/nack errors silently swallowed
-5. Error handling: Silent except/pass, missing error handling on DB/API/message paths, ignored Go error returns, panics in production
-6. Data integrity: Messages dropped, partial writes without rollback, state corruption, Neo4j session/transaction not closed
-7. Breaking changes: Shared library changes without downstream consideration, API contract changes, schema changes breaking rolling deploys, removed fields callers depend on
-8. Performance: N+1 Cypher queries in loops, unbounded memory, missing pagination, full graph scans
-9. Cross-service impact: Changes to common/, tildaobj/, tildadb/ affect all services — increase severity by one level for shared code changes
-
-GO-SPECIFIC:
-- Missing or ignored error returns
-- Goroutines without context cancellation
-- Unsafe concurrent map access
-- Panics in production paths
-- Neo4j session/transaction not closed
-- Cypher injection via string concatenation (must use parameterized queries)
-- Missing timeout on external calls
-
-PYTHON-SPECIFIC:
-- Blocking I/O inside async code
-- Silent exception swallowing (bare except/pass on critical paths)
-- User input concatenated into LLM prompts
-- LLM responses used without validation
-- Unbounded agent loops (missing max iterations)
-- Missing resource cleanup
-
-NEO4J/CYPHER:
-- Non-existent node labels or relationship types (verify against tildaobj/ if visible)
-- Relationships traversed in wrong direction
-- String concatenation instead of parameterized queries
-- Queries causing full graph scans (missing WHERE clause on indexed property)
-
-WHAT NOT TO CHECK:
-- Formatting, naming, import ordering, type hints
-- Missing docstrings or comments
-- "Consider using X instead of Y" suggestions
-- Hypothetical issues requiring full codebase context to verify
-- Non-critical optimizations
-- Alternative architectures
-
-Response format:
-{
-  "comments": [
-    {"path": "file.go", "line": 42, "body": "[CRITICAL] Description. Fix: ..."}
-  ]
-}"""
-
-        # Append repo-specific context if available
-        if repo_context:
-            system_prompt += "\n\nADDITIONAL REPO CONTEXT:\n" + repo_context
-
-        if CUSTOM_PROMPT:
-            system_prompt += "\n\nADDITIONAL INSTRUCTIONS:\n" + CUSTOM_PROMPT
+        if repo_architecture:
+            system_prompt += "\n\nREPOSITORY ARCHITECTURE (use this to understand the codebase):\n" + repo_architecture
 
         label = "incremental (new commits only)" if incremental else "full PR"
-        user_prompt = f"""Review this {label} diff. Return JSON only.
+        user_prompt = textwrap.dedent(f"""\
+            Review this {label} diff. Return JSON only. Follow the review guidelines.
 
-Title: {pr_title}
-Description: {pr_body}
-Branch: {head_branch} -> {base_branch}
+            Title: {pr_title}
+            Description: {pr_body}
+            Branch: {head_branch} -> {base_branch}
 
-Diff:
-```diff
-{diff}
-```"""
+            Diff:
+            ```diff
+            {diff}
+            ```""")
 
-        # ─── 7. Call Claude ───────────────────────────────────────────────
+        # ─── 6. Call Claude ───────────────────────────────────────────────
         print(f"Calling Claude ({MODEL})...")
         payload = {
             "model": MODEL,
@@ -309,105 +252,117 @@ Diff:
         comments = review.get("comments", [])
         print(f"  Claude returned {len(comments)} comment(s)")
 
-        # ─── 8. Filter: dedup, severity, cap ──────────────────────────────
-        filtered = []
-        skip_sev = 0
-        skip_dup = 0
-
-        for c in comments:
-            body = c.get("body", "")
-            path = c.get("path", "")
-            line = c.get("line", 0)
-
-            sev = "MEDIUM"
-            for s in SEVERITY_RANK:
-                if f"[{s}]" in body:
-                    sev = s; break
-
-            # Drop LOW
-            if SEVERITY_RANK.get(sev, 3) > 2:
-                skip_sev += 1; continue
-
-            # Dedup
-            if f"{path}:{line}" in seen:
-                skip_dup += 1; continue
-
-            filtered.append({"path": path, "line": line, "body": body, "_sev": sev})
-
-        filtered.sort(key=lambda x: SEVERITY_RANK.get(x["_sev"], 3))
-
-        # All CRITICALs always go through, cap only applies to HIGH/MEDIUM
-        criticals = [c for c in filtered if c["_sev"] == "CRITICAL"]
-        non_criticals = [c for c in filtered if c["_sev"] != "CRITICAL"]
-        capped_non_criticals = non_criticals[:MAX_COMMENTS]
-        final = criticals + capped_non_criticals
-        skipped_cap = max(0, len(non_criticals) - MAX_COMMENTS)
-
-        print(f"  Posting {len(final)} ({len(criticals)} CRITICAL uncapped + {len(capped_non_criticals)} HIGH/MEDIUM, skipped: {skip_sev} low-severity, {skip_dup} duplicates, {skipped_cap} over cap)")
-
-        # ─── 9. Post review ──────────────────────────────────────────────
-        label = "incremental" if incremental else "full"
-        sev_counts = {}
-        for c in final:
-            s = c["_sev"]; sev_counts[s] = sev_counts.get(s, 0) + 1
-        sev_line = ", ".join(f"{v} {k}" for k, v in sorted(sev_counts.items(), key=lambda x: SEVERITY_RANK.get(x[0], 3)))
-
-        body_text = f"## AI Code Review ({label})"
-        if sev_line:
-            body_text += f"\n\n{sev_line}"
-        if skip_dup:
-            body_text += f"\n\n_{skip_dup} duplicate(s) skipped_"
-        body_text += "\n\n---\n*Powered by Claude*"
-
-        if not final:
-            f = "/tmp/ai_review_lgtm.md"
-            with open(f, "w") as fh:
-                fh.write(f"## AI Code Review ({label})\n\nLGTM — no critical issues found.\n\n---\n*Powered by Claude*")
-            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", f)
-            print("  Posted LGTM")
+        # ─── 7. Post results ──────────────────────────────────────────────
+        # Post as PR review: summary body + inline comments on diff lines.
+        # Also post an issue comment with SHA marker for incremental tracking.
+        if not comments:
+            print("  No issues found.")
+            cf = "/tmp/ai_review_comment.md"
+            with open(cf, "w") as f:
+                f.write(f"No issues found.\n\n<!-- ai-review-sha:{head_sha} -->")
+            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
-        # Try batch post
-        payload = {
-            "commit_id": head_sha,
-            "body": body_text,
-            "event": "COMMENT",
-            "comments": [{"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]} for c in final]
+        # Category emoji mapping
+        CAT_EMOJI = {
+            # Severity levels
+            "critical": "\U0001f6d1",
+            "high": "\U0001f534",
+            "medium": "\U0001f7e0",
+            "low": "\U0001f7e1",
+            # Original categories
+            "security": "\U0001f6e1\ufe0f",
+            "injection": "\U0001f489",
+            "credentials": "\U0001f511",
+            "data loss": "\U0001f4a5",
+            "reliability": "\u26a0\ufe0f",
+            # REVIEW.md categories
+            "concurrency": "\U0001f500",
+            "performance": "\u26a1",
+            "design": "\U0001f4d0",
+            "go-specific": "\U0001f439",
+            "python/ai": "\U0001f40d",
+            "neo4j/cypher": "\U0001f4c0",
+            "database/migration": "\U0001f5c4\ufe0f",
+            "k8s": "\u2638\ufe0f",
+            "test coverage": "\U0001f9ea",
+            "monorepo/cross-service": "\U0001f517",
+            "breaking change": "\U0001f4a3",
+            "correctness": "\u2705",
+            "error handling": "\U0001f6a8",
         }
-        pf = "/tmp/ai_review_payload.json"
-        with open(pf, "w") as f:
-            json.dump(payload, f)
 
-        r = subprocess.run(
-            ["gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json",
-             f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--input", pf],
-            capture_output=True, text=True, timeout=60
+        def fmt_category(cat):
+            key = (cat or "").lower()
+            emoji = CAT_EMOJI.get(key, "\U0001f534")
+            return f"{emoji} {cat}"
+
+        # Build inline review comments for the diff
+        review_comments = []
+        for c in comments:
+            path = c.get("path", "")
+            line_num = c.get("line", 0)
+            body = c.get("body", "")
+            cat = c.get("category", "")
+            if path and line_num and body:
+                inline_body = f"{fmt_category(cat)}\n\n{body}"
+                review_comments.append({
+                    "path": path,
+                    "line": int(line_num),
+                    "side": "RIGHT",
+                    "body": inline_body
+                })
+
+        # Build formatted summary for the review body
+        summary_lines = [f"Found **{len(comments)}** issue(s):\n"]
+        summary_lines.append("| | File | Issue |")
+        summary_lines.append("|---|---|---|")
+        for i, c in enumerate(comments, 1):
+            path = c.get("path", "")
+            line_num = c.get("line", 0)
+            body = c.get("body", "").replace("|", "\\|")
+            cat = c.get("category", "")
+            short_path = path.split("/")[-1] if "/" in path else path
+            summary_lines.append(f"| {fmt_category(cat)} | `{short_path}:{line_num}` | {body} |")
+        summary_body = "\n".join(summary_lines)
+
+        # Submit PR review with inline comments + summary body
+        review_payload = {
+            "body": summary_body,
+            "event": "COMMENT",
+            "commit_id": head_sha,
+            "comments": review_comments
+        }
+
+        payload_file = "/tmp/ai_review_payload.json"
+        with open(payload_file, "w") as f:
+            json.dump(review_payload, f)
+
+        result = subprocess.run(
+            ["gh", "api", f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews",
+             "--input", payload_file, "--method", "POST"],
+            capture_output=True, text=True, timeout=120, env={**os.environ}
         )
 
-        if r.returncode == 0:
-            print(f"  Posted {len(final)} inline comment(s)")
-            out("review_status", "success"); out("comments_posted", str(len(final))); sys.exit(0)
+        if result.returncode != 0:
+            print(f"  Review API failed: {result.stderr[:500]}")
+            print("  Falling back to summary-only comment...")
+            cf = "/tmp/ai_review_comment.md"
+            with open(cf, "w") as f:
+                f.write(summary_body)
+            gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
 
-        # Batch failed — post one by one, skip line mismatches
-        print(f"  Batch failed, posting individually...")
-        posted = 0
-        for i, c in enumerate(final):
-            sp = {"commit_id": head_sha, "body": body_text if i == 0 else "", "event": "COMMENT",
-                  "comments": [{"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]}]}
-            sf = f"/tmp/ai_review_{i}.json"
-            with open(sf, "w") as f:
-                json.dump(sp, f)
-            sr = subprocess.run(
-                ["gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json",
-                 f"repos/{REPOSITORY}/pulls/{PR_NUMBER}/reviews", "--input", sf],
-                capture_output=True, text=True, timeout=30
-            )
-            if sr.returncode == 0:
-                posted += 1
-            else:
-                print(f"    Skipped {c['path']}:{c['line']} (line not in diff)")
+            posted = len(comments)
+        else:
+            print(f"  Posted review with {len(review_comments)} inline comment(s) + summary")
+            posted = len(review_comments)
 
-        print(f"  Posted {posted}/{len(final)}")
+        # Always post SHA tracker as issue comment for incremental tracking
+        sha_cf = "/tmp/ai_review_sha.md"
+        with open(sha_cf, "w") as f:
+            f.write(f"<!-- ai-review-sha:{head_sha} -->")
+        gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", sha_cf)
+
         out("review_status", "success"); out("comments_posted", str(posted))
 
         PYEOF
