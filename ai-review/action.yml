@@ -149,6 +149,42 @@ runs:
         if len(diff) > MAX_DIFF_SIZE:
             diff = diff[:MAX_DIFF_SIZE] + "\n\n... [DIFF TRUNCATED] ..."
 
+        # ─── 3b. Fetch full file contents for changed files ─────────────
+        # Extract changed file paths from the diff
+        import base64 as _base64
+        changed_files = []
+        for line in diff.split("\n"):
+            if line.startswith("diff --git a/"):
+                parts = line.split(" b/")
+                if len(parts) == 2:
+                    changed_files.append(parts[1])
+
+        # Deduplicate and limit to avoid excessive API calls
+        changed_files = list(dict.fromkeys(changed_files))
+        MAX_FILES = 20
+        MAX_FILE_CHARS = 80000  # total budget for all file contents
+        if len(changed_files) > MAX_FILES:
+            print(f"  Too many changed files ({len(changed_files)}), fetching first {MAX_FILES}")
+            changed_files = changed_files[:MAX_FILES]
+
+        file_contents = {}
+        total_chars = 0
+        for fpath in changed_files:
+            raw = gh("api", f"repos/{REPOSITORY}/contents/{fpath}?ref={head_sha}",
+                      "--jq", ".content")
+            if raw:
+                try:
+                    content = _base64.b64decode(raw).decode("utf-8", errors="replace")
+                    if total_chars + len(content) > MAX_FILE_CHARS:
+                        print(f"  Skipping {fpath} (file context budget exceeded)")
+                        continue
+                    file_contents[fpath] = content
+                    total_chars += len(content)
+                except Exception:
+                    pass  # binary file or decode error — skip
+
+        print(f"  Fetched {len(file_contents)}/{len(changed_files)} file(s) for context ({total_chars} chars)")
+
         # ─── 4. Read REVIEW.md ──────────────────────────────────────────
         if not CONTEXT_FILE or not os.path.isfile(CONTEXT_FILE):
             print(f"::error::context-file not found: '{CONTEXT_FILE}'. Each repo must provide a REVIEW.md.")
@@ -194,6 +230,15 @@ runs:
             system_prompt += "\n\nREPOSITORY ARCHITECTURE (use this to understand the codebase):\n" + repo_architecture
 
         label = "incremental (new commits only)" if incremental else "full PR"
+
+        # Build file context section
+        file_context_section = ""
+        if file_contents:
+            file_context_parts = []
+            for fpath, content in file_contents.items():
+                file_context_parts.append(f"### {fpath}\n```\n{content}\n```")
+            file_context_section = "\n\nFull file contents (use these to understand complete context — imports, types, surrounding code):\n\n" + "\n\n".join(file_context_parts)
+
         user_prompt = textwrap.dedent(f"""\
             Review this {label} diff. Return JSON only. Follow the review guidelines.
 
@@ -204,7 +249,7 @@ runs:
             Diff:
             ```diff
             {diff}
-            ```""")
+            ```""") + file_context_section
 
         # ─── 6. Call Claude ───────────────────────────────────────────────
         print(f"Calling Claude ({MODEL})...")
@@ -263,38 +308,14 @@ runs:
             gh("pr", "comment", PR_NUMBER, "--repo", REPOSITORY, "--body-file", cf)
             out("review_status", "success"); out("comments_posted", "0"); sys.exit(0)
 
-        # Category emoji mapping
+        # Category emoji — only CRITICAL is used per REVIEW.md
         CAT_EMOJI = {
-            # Severity levels
             "critical": "\U0001f6d1",
-            "high": "\U0001f534",
-            "medium": "\U0001f7e0",
-            "low": "\U0001f7e1",
-            # Original categories
-            "security": "\U0001f6e1\ufe0f",
-            "injection": "\U0001f489",
-            "credentials": "\U0001f511",
-            "data loss": "\U0001f4a5",
-            "reliability": "\u26a0\ufe0f",
-            # REVIEW.md categories
-            "concurrency": "\U0001f500",
-            "performance": "\u26a1",
-            "design": "\U0001f4d0",
-            "go-specific": "\U0001f439",
-            "python/ai": "\U0001f40d",
-            "neo4j/cypher": "\U0001f4c0",
-            "database/migration": "\U0001f5c4\ufe0f",
-            "k8s": "\u2638\ufe0f",
-            "test coverage": "\U0001f9ea",
-            "monorepo/cross-service": "\U0001f517",
-            "breaking change": "\U0001f4a3",
-            "correctness": "\u2705",
-            "error handling": "\U0001f6a8",
         }
 
         def fmt_category(cat):
             key = (cat or "").lower()
-            emoji = CAT_EMOJI.get(key, "\U0001f534")
+            emoji = CAT_EMOJI.get(key, "\U0001f6d1")
             return f"{emoji} {cat}"
 
         # Build inline review comments for the diff
