@@ -75,6 +75,16 @@ runs:
         tags: |
           type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
 
+    - name: Set target environment
+      id: set_target
+      shell: bash
+      run: |
+        if [[ ${{ github.ref_type }} == "tag" ]]; then
+          echo "TARGET_ENV=production" >> $GITHUB_ENV
+        else
+          echo "TARGET_ENV=dev" >> $GITHUB_ENV
+        fi
+
     - uses: docker/build-push-action@v2
       with:
         context: ${{ inputs.context }}
@@ -82,7 +92,7 @@ runs:
         builder: ${{ steps.buildx.outputs.name }}
         push: ${{ inputs.push }}
         tags: ${{ steps.meta.outputs.tags }}
-        target: ${{ inputs.target }}
+        target: ${{ env.TARGET_ENV }}
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
           ${{ inputs.build_args }}
