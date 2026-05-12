@@ -73,7 +73,7 @@ runs:
         images: |
           ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
         tags: |
-          type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
+          type=sha,enable=true,priority=100,prefix=${{ (github.head_ref || github.ref_name) == 'production_hotfixes' && 'production' || (github.head_ref || github.ref_name) }}-,suffix=,format=short
 
     - uses: docker/build-push-action@v2
       with:
