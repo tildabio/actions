@@ -109,7 +109,11 @@ def review_pr(cfg: Config, conn: sqlite3.Connection) -> None:
             f"(lockfile bump / docs-only / generated). Push a substantive "
             f"commit to re-engage, or set `force-depth` to override.</sub>",
         )
-        _update_state(conn, cfg, files, prior.last_review_id if prior else None, "skip", 0)
+        # Record head_sha for idempotency but DO NOT mark per-file blob_shas as
+        # "reviewed" — they weren't. If we did, a later FORCE_DEPTH run (or a
+        # config change that flips the same diff into a real review) would
+        # filter every file out as "already reviewed since last time".
+        _update_state(conn, cfg, [], prior.last_review_id if prior else None, "skip", 0)
         return
 
     # === Pass 2: Static analyzers ===
