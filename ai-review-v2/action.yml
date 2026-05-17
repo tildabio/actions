@@ -148,4 +148,10 @@ runs:
         # (.review.yaml, CLAUDE.md, codegraph repo_root) target the
         # CONSUMER repo, not the action repo. `pip install -e .` already
         # made the `src` package importable from anywhere.
-        python -m src ${{ inputs.mode }}
+        #
+        # -P (PEP 668 / Python 3.11+) tells the interpreter NOT to prepend
+        # the CWD to sys.path. Without this, a consumer repo that happens
+        # to have its own top-level `src/` directory (very common) shadows
+        # our editable-installed `src` package and `-m src` fails with
+        # "'src' is a package and cannot be directly executed".
+        python -P -m src ${{ inputs.mode }}
