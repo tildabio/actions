@@ -143,5 +143,9 @@ runs:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
-        cd ${{ github.action_path }}
+        # IMPORTANT: stay in the consumer repo (github.workspace) so that
+        # `git show <sha>:<path>` and other relative-path lookups
+        # (.review.yaml, CLAUDE.md, codegraph repo_root) target the
+        # CONSUMER repo, not the action repo. `pip install -e .` already
+        # made the `src` package importable from anywhere.
         python -m src ${{ inputs.mode }}
