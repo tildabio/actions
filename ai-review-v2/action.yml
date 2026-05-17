@@ -119,6 +119,11 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
+        # Make `src/` importable from anywhere without relying on
+        # pip's editable-install autodiscovery (which pyproject.toml
+        # doesn't fully configure). Combined with -P this guarantees:
+        # consumer src/ in CWD won't shadow, our src/ is found via PYTHONPATH.
+        PYTHONPATH: ${{ github.action_path }}
         REVIEW_API_KEY: ${{ inputs.review-api-key }}
         REVIEW_BASE_URL: ${{ inputs.review-base-url }}
         REVIEW_MODEL: ${{ inputs.review-model }}
