@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
 import sqlite3
 from pathlib import Path
 
@@ -30,6 +31,11 @@ log = logging.getLogger(__name__)
 
 
 SEVERITY_EMOJI = {"critical": "🔴", "major": "🟠", "minor": "🟡", "nit": "💭"}
+
+# Visible + hidden v2 branding so reviewers (and grep) can never confuse v2
+# output with v1's. Every comment/review v2 posts carries both.
+V2_BADGE = "🧪 **PR Reviewer v2**"
+V2_MARKER = "<!-- pr-reviewer-v2 -->"
 
 
 def review_pr(cfg: Config, conn: sqlite3.Connection) -> None:
@@ -86,10 +92,22 @@ def review_pr(cfg: Config, conn: sqlite3.Connection) -> None:
     focus_areas = triage.get("focus_areas") or []
     log.info("triage → depth=%s focus=%s", depth, focus_areas)
 
+    # Operator override: FORCE_DEPTH env var beats the triage result.
+    # Useful for evaluation runs, high-risk PRs, or debugging.
+    force_depth = (os.environ.get("FORCE_DEPTH") or "").strip().lower()
+    if force_depth in {"light", "standard", "deep"}:
+        if force_depth != depth:
+            log.info("FORCE_DEPTH=%s overriding triage depth=%s", force_depth, depth)
+        depth = force_depth
+
     if depth == "skip":
         github_api.post_pr_comment(
             cfg.github_repo, cfg.pr_number,
-            f"🤖 **Skipping review** — {triage.get('reasoning', '')}",
+            f"{V2_MARKER}\n{V2_BADGE} — _skipped by triage_\n\n"
+            f"> {triage.get('reasoning', '(no reason given)')}\n\n"
+            f"<sub>Triage skips only when the diff itself is trivial "
+            f"(lockfile bump / docs-only / generated). Push a substantive "
+            f"commit to re-engage, or set `force-depth` to override.</sub>",
         )
         _update_state(conn, cfg, files, prior.last_review_id if prior else None, "skip", 0)
         return
@@ -338,18 +356,49 @@ def _post_review(
 
 
 def _format_finding(f: dict, prefix: str = "") -> str:
-    emoji = SEVERITY_EMOJI.get(f.get("severity", ""), "")
-    header = (f"{emoji} **{prefix}{(f.get('severity') or '').upper()} · "
-              f"{f.get('category', '')}** · confidence {f.get('confidence', '?')}/5")
-    parts = [header, f"### {f.get('title', '')}", f.get("body", "")]
+    """Render an inline finding with clear sections and a one-click suggestion.
+
+    Output structure:
+        <hidden v2 marker>
+        🧪 **PR Reviewer v2** · 🔴 **CRITICAL · security** · confidence 5/5
+        ### {prefix}Title
+
+        {body}                          ← markdown allowed: bold, code, bullets
+
+        **Suggested fix**
+        ```suggestion
+        {code GitHub will offer as one-click "Commit suggestion"}
+        ```
+    """
+    sev = (f.get("severity") or "").lower()
+    cat = (f.get("category") or "").lower()
+    conf = f.get("confidence", "?")
+    sev_emoji = SEVERITY_EMOJI.get(sev, "")
+    title = (f.get("title") or "").strip()
+    body = (f.get("body") or "").strip()
+
+    header = (
+        f"{V2_MARKER}\n"
+        f"{V2_BADGE} · {sev_emoji} **{sev.upper() or 'FINDING'}"
+        f"{' · ' + cat if cat else ''}** · confidence {conf}/5"
+    )
+    parts: list[str] = [header]
+    if title:
+        parts.append(f"### {prefix}{title}")
+    if body:
+        parts.append(body)
+
     sug = f.get("suggestion")
-    if sug and isinstance(sug, str) and sug.strip():
+    if isinstance(sug, str) and sug.strip():
         sug = sug.strip()
-        if not sug.startswith("```"):
-            parts.append(f"```suggestion\n{sug}\n```")
-        else:
-            parts.append(sug)
-    return "\n\n".join(p for p in parts if p)
+        # If the model already wrapped it in a ```suggestion fence, keep as-is.
+        # Otherwise wrap so GitHub renders the one-click "Commit suggestion" UI.
+        already_fenced = sug.startswith("```suggestion")
+        suggestion_block = sug if already_fenced else f"```suggestion\n{sug}\n```"
+        parts.append("**Suggested fix** _(click \"Commit suggestion\" to accept)_")
+        parts.append(suggestion_block)
+
+    return "\n\n".join(parts)
 
 
 def _build_summary_md(summary: dict, file_findings: dict, cross: dict,
@@ -357,9 +406,15 @@ def _build_summary_md(summary: dict, file_findings: dict, cross: dict,
     total = sum(len(fr.get("findings", [])) for fr in file_findings.values())
     cross_list = cross.get("cross_cutting_findings", [])
 
-    out = ["## 🤖 Automated Review", ""]
+    out = [
+        V2_MARKER,
+        "## 🧪 PR Reviewer v2",
+        "_LLM-agnostic reviewer with codegraph, learnings, and incremental "
+        "state. Distinct from the existing v1 `ai-review` action._",
+        "",
+    ]
     if summary.get("tldr"):
-        out += [f"**{summary['tldr']}**", ""]
+        out += [f"**TL;DR.** {summary['tldr']}", ""]
     if summary.get("walkthrough"):
         out += ["### Walkthrough", summary["walkthrough"], ""]
     if summary.get("sequence_diagram"):

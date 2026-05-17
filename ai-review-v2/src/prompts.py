@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 
 TRIAGE_SYSTEM = """You triage pull requests to decide how much review effort they deserve.
 
+Your decision MUST be based on the FILES CHANGED — what code is touched, how
+much, and where. Do NOT base "skip" on the PR title or description alone. Authors
+routinely write "test", "WIP", "DO NOT MERGE", "evaluation", "ignore me", etc. on
+PRs that contain real, production-shape code; those PRs still need a review.
+
 Output JSON only. Be terse — no prose outside the JSON."""
 
 
@@ -34,24 +39,33 @@ def triage_user(pr: dict, files: list) -> str:
         for f in files[:60]
     )
     extra = f"\n  ... and {len(files) - 60} more files" if len(files) > 60 else ""
-    return f"""PR Title: {pr.get('title', '')}
+    return f"""PR Title (context only — do not use this to decide skip): {pr.get('title', '')}
 
-PR Description:
+PR Description (context only — do not use this to decide skip):
 {(pr.get('body') or '(none)')[:2000]}
 
-Files changed ({len(files)} total):
+Files changed ({len(files)} total) — THIS is what you triage on:
 {file_lines}{extra}
 
 Output JSON exactly:
 {{
   "depth": "skip" | "light" | "standard" | "deep",
-  "reasoning": "one sentence",
+  "reasoning": "one sentence citing the FILES, not the title/body",
   "focus_areas": ["security" | "performance" | "correctness" | "concurrency" | "tests" | "api_design" | "error_handling"]
 }}
 
-Rules:
-- skip:     docs-only, generated files only, lockfile/dependency bumps only, version bumps
-- light:    <60 net lines, single isolated file, test-only additions, trivial refactor
+Rules — apply to the FILES CHANGED, never to the PR title/body:
+
+- skip: every changed file is ONE of:
+    * a lockfile (package-lock.json, yarn.lock, poetry.lock, go.sum, Cargo.lock, ...)
+    * pure documentation (*.md, *.rst, *.txt, docs/**)
+    * generated code (header says "@generated" / "DO NOT EDIT" / "auto-generated")
+    * a version bump in a manifest with no source change
+  DO NOT skip just because the PR title says "test", "WIP", "DO NOT MERGE",
+  "evaluation", "throwaway", etc. If even ONE file contains substantive source
+  code (a real .py / .ts / .go / .rs / etc. file with logic), use light/standard/deep.
+
+- light:    <60 net source lines, single isolated file, test-only additions, trivial refactor
 - standard: typical feature work or bug fix
 - deep:     >500 net lines, OR auth/crypto/payments/IAM/SQL/migrations,
             OR breaking API change, OR introduces concurrency primitives,
@@ -121,6 +135,29 @@ Strict rules:
 6. No hedging ("this could potentially...") — if not a real problem, omit it.
 7. No restating what the code does. Findings are about what's wrong.
 8. If the file is fine, return an empty findings array. Empty is valid.
+
+Formatting rules for `body` (rendered as Markdown in a GitHub PR comment):
+- Structure it as three short labelled paragraphs, in this order:
+    **Problem.** One sentence naming what's wrong.
+    **Why it matters.** One or two sentences on concrete consequences in THIS
+      codebase / on THIS code path — not generic textbook risk.
+    **Fix.** One sentence describing the intended change at a high level.
+- Use inline backticks for identifiers, e.g. `find_user_by_email`, `out=[]`.
+- Use a fenced code block (```) to quote SHORT snippets only when it clarifies.
+- No emojis in `body` (the surrounding template adds them).
+- Keep total `body` length under ~600 characters.
+
+Formatting rules for `suggestion` (rendered as a GitHub `suggestion` block,
+which lets the reviewer click "Commit suggestion" to accept):
+- Provide a `suggestion` whenever the fix is mechanical and fits on the cited
+  lines (e.g. parameterize a SQL query, change `==` to `is`, replace `out=[]`
+  with `out=None` + body check, replace bare `except:` with `except Exception:`).
+- The suggestion must be the EXACT replacement text for the cited lines
+  (from `line` through `end_line`), with the same indentation as the original.
+- Do NOT include `'''suggestion` fences — the wrapper adds them. Just the code.
+- If a clean mechanical replacement is not possible (cross-cutting refactor,
+  needs new helper, design discussion), set `suggestion` to null and explain
+  the fix in `body` only. Do not invent half-suggestions.
 
 Output JSON only."""
 
@@ -223,8 +260,8 @@ Output JSON exactly:
       "category": "bug" | "security" | "performance" | "concurrency" | "error_handling" | "api_design" | "testing" | "maintainability",
       "confidence": <1-5>,
       "title": "Short headline (max 80 chars). State the problem.",
-      "body": "Markdown. What's wrong, why it matters HERE, what happens if not fixed.",
-      "suggestion": "<replacement code for cited lines, plain text, or null>"
+      "body": "Markdown body, structured as **Problem.** / **Why it matters.** / **Fix.** paragraphs. See system prompt.",
+      "suggestion": "<exact replacement text for lines [line..end_line], same indentation, NO ```suggestion fences. null if not mechanically replaceable.>"
     }}
   ]
 }}"""

@@ -68,6 +68,10 @@ inputs:
     description: 'Orphan branch name where the SQLite DB is persisted'
     required: false
     default: '__reviewer_state__'
+  force-depth:
+    description: "Override triage decision: 'light' | 'standard' | 'deep'. Empty = let triage decide. Useful for evaluation runs or high-risk PRs."
+    required: false
+    default: ''
 
   github-token:
     description: 'Token with contents:write (for state branch) and pull-requests:write'
@@ -131,6 +135,7 @@ runs:
         ENABLE_LEARNINGS: ${{ inputs.enable-learnings }}
         ENABLE_INCREMENTAL: ${{ inputs.enable-incremental }}
         STATE_BRANCH: ${{ inputs.state-branch }}
+        FORCE_DEPTH: ${{ inputs.force-depth }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GH_TOKEN: ${{ inputs.github-token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
