@@ -35,7 +35,11 @@ def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    # check_same_thread=False: per-file review pass uses a ThreadPoolExecutor
+    # and each worker calls knowledge.log_llm_call on this same connection.
+    # SQLite itself serializes writes; we just need to opt out of Python's
+    # client-side thread check.
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.enable_load_extension(True)
