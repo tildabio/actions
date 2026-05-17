@@ -190,11 +190,29 @@ def post_review(
     inline_comments: list[dict],
     event: str,
 ) -> int | None:
-    """POST /repos/{owner}/{repo}/pulls/{pr}/reviews. Returns the review id."""
+    """POST /repos/{owner}/{repo}/pulls/{pr}/reviews. Returns the review id.
+
+    GitHub's review-with-comments API is fussy: a single bad line/path in any
+    comment fails the whole submission with HTTP 422 and a single inscrutable
+    error string. We try the all-in-one submission first; if it 422s, we retry
+    submitting the summary review without inline comments, then attach the
+    inline findings as standalone review comments one at a time (skipping any
+    individual comment that GitHub still rejects).
+    """
+    return (
+        _try_submit_review(repo, pr_number, head_sha, body, inline_comments, event)
+        or _fallback_split_submit(repo, pr_number, head_sha, body, inline_comments, event)
+    )
+
+
+def _try_submit_review(
+    repo: str, pr_number: int, head_sha: str,
+    body: str, inline_comments: list[dict], event: str,
+) -> int | None:
     payload = {
         "commit_id": head_sha,
         "body": body,
-        "event": event,             # APPROVE | REQUEST_CHANGES | COMMENT
+        "event": event,
         "comments": inline_comments,
     }
     r = subprocess.run(
@@ -205,15 +223,57 @@ def post_review(
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        log.error("review submit failed: %s", r.stderr.strip()[:500])
-        # Fallback: at least post the summary as a comment so it's not lost
-        gh(["pr", "comment", str(pr_number), "--repo", repo, "--body", body])
+        n = len(inline_comments)
+        log.error(
+            "review submit failed (n_inline=%d): stderr=%s | stdout=%s",
+            n, r.stderr.strip()[:1500], r.stdout.strip()[:1500],
+        )
         return None
     try:
-        data = json.loads(r.stdout)
-        return data.get("id")
+        return json.loads(r.stdout).get("id")
     except Exception:
         return None
+
+
+def _fallback_split_submit(
+    repo: str, pr_number: int, head_sha: str,
+    body: str, inline_comments: list[dict], event: str,
+) -> int | None:
+    """Post the summary review with no comments, then attach each inline as a
+    separate review comment. Slower but resilient to a single bad line."""
+    log.info("Falling back to split submission: summary review + per-comment")
+    review_id = _try_submit_review(repo, pr_number, head_sha, body, [], event)
+    if review_id is None:
+        # Even the summary failed; degrade to a plain PR comment.
+        log.error("Summary review also failed; degrading to plain PR comment")
+        gh(["pr", "comment", str(pr_number), "--repo", repo, "--body", body])
+        return None
+
+    posted = 0
+    for c in inline_comments:
+        payload = {
+            "body": c["body"],
+            "commit_id": head_sha,
+            "path": c["path"],
+            "line": c["line"],
+            "side": c.get("side", "RIGHT"),
+        }
+        r = subprocess.run(
+            ["gh", "api", "--method", "POST",
+             f"repos/{repo}/pulls/{pr_number}/comments",
+             "--input", "-"],
+            input=json.dumps(payload),
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            posted += 1
+        else:
+            log.warning(
+                "inline comment failed for %s:%s — %s",
+                c.get("path"), c.get("line"), r.stderr.strip()[:300],
+            )
+    log.info("Attached %d/%d inline review comments", posted, len(inline_comments))
+    return review_id
 
 
 def post_pr_comment(repo: str, pr_number: int, body: str) -> None:
