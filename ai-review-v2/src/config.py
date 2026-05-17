@@ -101,13 +101,13 @@ def load() -> Config:
 
     triage = LLMEndpoint(
         base_url=env_or_yaml("TRIAGE_BASE_URL", ["triage", "base_url"], review_url),
-        api_key=os.environ.get("TRIAGE_API_KEY", review_key),
+        api_key=os.environ.get("TRIAGE_API_KEY") or review_key,
         model=env_or_yaml("TRIAGE_MODEL", ["triage", "model"], "gpt-4o-mini"),
     )
     review = LLMEndpoint(base_url=review_url, api_key=review_key, model=review_model)
     embedding = LLMEndpoint(
         base_url=env_or_yaml("EMBED_BASE_URL", ["embedding", "base_url"], review_url),
-        api_key=os.environ.get("EMBED_API_KEY", review_key),
+        api_key=os.environ.get("EMBED_API_KEY") or review_key,
         model=env_or_yaml("EMBED_MODEL", ["embedding", "model"], "text-embedding-3-small"),
     )
 
