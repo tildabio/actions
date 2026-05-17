@@ -1,0 +1,50 @@
+name: PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write          # required to push to the state branch
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: your-org/pr-review-action-v2@v2
+        with:
+          mode: review
+
+          # --- Pick ONE provider config ---
+
+          # OpenAI
+          review-api-key: ${{ secrets.OPENAI_API_KEY }}
+          review-model: gpt-4o
+          triage-model: gpt-4o-mini
+
+          # Anthropic (OpenAI-compat layer). Note: Anthropic has no /v1/embeddings,
+          # so embed-* must point at OpenAI or Voyage if you use Claude here.
+          # review-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # review-base-url: https://api.anthropic.com/v1
+          # review-model: claude-opus-4-7
+          # embed-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # embed-base-url: https://api.openai.com/v1
+          # embed-model: text-embedding-3-small
+
+          # DeepSeek (cheap, supports embeddings)
+          # review-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          # review-base-url: https://api.deepseek.com/v1
+          # review-model: deepseek-chat
+
+          # Behavior
+          confidence-threshold: '3'
+          enable-codegraph: 'true'
+          enable-learnings: 'true'
+          enable-incremental: 'true'
+
+          github-token: ${{ secrets.GITHUB_TOKEN }}

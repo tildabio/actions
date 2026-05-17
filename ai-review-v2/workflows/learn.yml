@@ -1,0 +1,25 @@
+name: Learn from Comments
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: write          # for state branch
+  pull-requests: write     # to reply
+
+jobs:
+  learn:
+    # Only run if the comment is on a PR (not a plain issue) and mentions the bot
+    if: |
+      github.event.issue.pull_request != null ||
+      github.event_name == 'pull_request_review_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: your-org/pr-review-action-v2@v2
+        with:
+          mode: learn
+          review-api-key: ${{ secrets.OPENAI_API_KEY }}
+          review-model: gpt-4o-mini   # extract is cheap
+          github-token: ${{ secrets.GITHUB_TOKEN }}

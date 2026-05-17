@@ -1,0 +1,72 @@
+# Drop this at the root of any repo to customize review behavior.
+# All keys are optional. Environment-variable inputs from the action override
+# anything set here.
+
+# ---- Models (usually set via action inputs; here for reference) ----
+# review:
+#   base_url: https://api.openai.com/v1
+#   model: gpt-4o
+# triage:
+#   model: gpt-4o-mini
+# embedding:
+#   base_url: https://api.openai.com/v1
+#   model: text-embedding-3-small
+#   dimensions: 1536
+
+# ---- Feature toggles ----
+features:
+  analyzers:   true
+  codegraph:   true
+  learnings:   true
+  incremental: true
+
+# ---- Limits ----
+limits:
+  max_files: 50
+  max_file_bytes: 100000
+  confidence: 3      # findings below this confidence (1-5) are dropped
+  parallel: 6        # how many files to review in parallel
+
+# ---- State branch for the SQLite knowledge DB ----
+state:
+  branch: __reviewer_state__
+
+# ---- Additional skip patterns (extend the built-in defaults) ----
+skip_patterns:
+  - "**/*.snap"          # jest snapshots
+  - "**/testdata/**"
+  - "schemas/generated/**"
+
+# ---- Path-based review instructions ----
+# Glob patterns are gitignore-style. Instructions are injected into the per-file
+# review prompt for any matching file.
+path_instructions:
+  - pattern: "src/api/**"
+    instructions: |
+      Public API surface. Be strict about:
+      - Breaking changes to function signatures or returned shapes
+      - Missing auth/permission checks on new endpoints
+      - Lack of input validation on user-controlled fields
+      - Missing tests in tests/api/
+
+  - pattern: "src/db/**"
+    instructions: |
+      Database layer. Be strict about:
+      - N+1 query patterns
+      - Missing indexes on new query patterns
+      - Transactions not properly scoped
+      - SQL injection via string concatenation (we use parameterized queries)
+
+  - pattern: "**/*.tsx"
+    instructions: |
+      React components:
+      - useEffect cleanup functions must cancel async work
+      - useCallback/useMemo dependencies must be exhaustive
+      - No direct DOM manipulation outside refs
+
+  - pattern: "infra/**"
+    instructions: |
+      Infrastructure code (Terraform/Pulumi):
+      - All secrets must go through the central secret manager
+      - Resources must have ownership tags
+      - Public-facing resources require explicit approval in PR description

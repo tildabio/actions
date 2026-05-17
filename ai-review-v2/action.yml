@@ -1,0 +1,142 @@
+name: 'PR Reviewer'
+description: 'LLM-agnostic AI PR reviewer with codegraph, learnings, and incremental state'
+author: 'you'
+branding:
+  icon: 'check-circle'
+  color: 'orange'
+
+inputs:
+  mode:
+    description: "'review' (default) for PR review, 'learn' for processing @-mention comments"
+    required: false
+    default: 'review'
+
+  # ---- Primary review model ----
+  review-api-key:
+    description: 'API key for the primary review model'
+    required: true
+  review-base-url:
+    description: 'OpenAI-compatible base URL'
+    required: false
+    default: 'https://api.openai.com/v1'
+  review-model:
+    description: 'Model id for deep review passes (file review, summary, cross-cut)'
+    required: false
+    default: 'gpt-4o'
+
+  # ---- Triage model (cheap) ----
+  triage-api-key:
+    description: 'Defaults to review-api-key'
+    required: false
+  triage-base-url:
+    description: 'Defaults to review-base-url'
+    required: false
+  triage-model:
+    required: false
+    default: 'gpt-4o-mini'
+
+  # ---- Embedding model (for learnings vector search) ----
+  embed-api-key:
+    description: 'Defaults to review-api-key. Anthropic-only setups should point this at OpenAI or Voyage.'
+    required: false
+  embed-base-url:
+    required: false
+  embed-model:
+    required: false
+    default: 'text-embedding-3-small'
+  embed-dimensions:
+    required: false
+    default: '1536'
+
+  # ---- Behavior ----
+  max-files:
+    required: false
+    default: '50'
+  confidence-threshold:
+    required: false
+    default: '3'
+  enable-codegraph:
+    required: false
+    default: 'true'
+  enable-learnings:
+    required: false
+    default: 'true'
+  enable-incremental:
+    required: false
+    default: 'true'
+  state-branch:
+    description: 'Orphan branch name where the SQLite DB is persisted'
+    required: false
+    default: '__reviewer_state__'
+
+  github-token:
+    description: 'Token with contents:write (for state branch) and pull-requests:write'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout PR head (review mode)
+      if: inputs.mode == 'review'
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Checkout default branch (learn mode)
+      if: inputs.mode == 'learn'
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install ripgrep (needed for codegraph)
+      shell: bash
+      run: |
+        if ! command -v rg >/dev/null; then
+          sudo apt-get update -qq
+          sudo apt-get install -y ripgrep
+        fi
+
+    - name: Install Python deps
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        # Best-effort: language-specific analyzers
+        pip install --quiet ruff bandit semgrep 2>/dev/null || true
+
+    - name: Run
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        REVIEW_API_KEY: ${{ inputs.review-api-key }}
+        REVIEW_BASE_URL: ${{ inputs.review-base-url }}
+        REVIEW_MODEL: ${{ inputs.review-model }}
+        TRIAGE_API_KEY: ${{ inputs.triage-api-key }}
+        TRIAGE_BASE_URL: ${{ inputs.triage-base-url }}
+        TRIAGE_MODEL: ${{ inputs.triage-model }}
+        EMBED_API_KEY: ${{ inputs.embed-api-key }}
+        EMBED_BASE_URL: ${{ inputs.embed-base-url }}
+        EMBED_MODEL: ${{ inputs.embed-model }}
+        EMBED_DIMENSIONS: ${{ inputs.embed-dimensions }}
+        MAX_FILES: ${{ inputs.max-files }}
+        CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
+        ENABLE_CODEGRAPH: ${{ inputs.enable-codegraph }}
+        ENABLE_LEARNINGS: ${{ inputs.enable-learnings }}
+        ENABLE_INCREMENTAL: ${{ inputs.enable-incremental }}
+        STATE_BRANCH: ${{ inputs.state-branch }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        cd ${{ github.action_path }}
+        python -m src ${{ inputs.mode }}
