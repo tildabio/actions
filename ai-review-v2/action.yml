@@ -119,11 +119,6 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
-        # Make `src/` importable from anywhere without relying on
-        # pip's editable-install autodiscovery (which pyproject.toml
-        # doesn't fully configure). Combined with -P this guarantees:
-        # consumer src/ in CWD won't shadow, our src/ is found via PYTHONPATH.
-        PYTHONPATH: ${{ github.action_path }}
         REVIEW_API_KEY: ${{ inputs.review-api-key }}
         REVIEW_BASE_URL: ${{ inputs.review-base-url }}
         REVIEW_MODEL: ${{ inputs.review-model }}
@@ -148,15 +143,14 @@ runs:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
-        # IMPORTANT: stay in the consumer repo (github.workspace) so that
-        # `git show <sha>:<path>` and other relative-path lookups
-        # (.review.yaml, CLAUDE.md, codegraph repo_root) target the
-        # CONSUMER repo, not the action repo. `pip install -e .` already
-        # made the `src` package importable from anywhere.
+        # Stay in the consumer repo (github.workspace) so `git show <sha>:<path>`
+        # and other relative-path lookups (.review.yaml, CLAUDE.md, codegraph
+        # repo_root) target the CONSUMER repo, not the action repo. pyproject.toml
+        # is configured to expose the `src` package via setuptools so a plain
+        # editable install handles importability with no PYTHONPATH gymnastics.
         #
-        # -P (PEP 668 / Python 3.11+) tells the interpreter NOT to prepend
-        # the CWD to sys.path. Without this, a consumer repo that happens
-        # to have its own top-level `src/` directory (very common) shadows
-        # our editable-installed `src` package and `-m src` fails with
-        # "'src' is a package and cannot be directly executed".
+        # -P (Python 3.11+) tells the interpreter NOT to prepend CWD to sys.path.
+        # Without this, a consumer repo that happens to have its own top-level
+        # `src/` directory (very common) shadows our installed `src` package and
+        # `-m src` fails with "'src' is a package and cannot be directly executed".
         python -P -m src ${{ inputs.mode }}

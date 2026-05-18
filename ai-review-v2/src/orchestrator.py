@@ -277,15 +277,46 @@ def _is_generated(content: str) -> bool:
 
 
 def _load_repo_conventions() -> str:
-    for name in ("CLAUDE.md", "AGENTS.md", ".cursorrules", ".windsurfrules",
-                 "CODESTYLE.md", "STYLEGUIDE.md", "CONTRIBUTING.md"):
+    """Load repo conventions from the first matching file.
+
+    Search order tries the most specific / most modern conventions first.
+    `.github/REVIEW.md` and `.github/AI_CONTEXT.md` are common patterns
+    from earlier AI-review tooling — pick them up so v2 inherits the
+    same context v1 did when consumers already maintained those.
+    """
+    candidates = (
+        # Modern, generic
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".cursorrules",
+        ".windsurfrules",
+        # Review-specific policy (common from prior AI-review setups)
+        ".github/REVIEW.md",
+        ".github/AI_CONTEXT.md",
+        # Traditional style/contrib docs
+        "CODESTYLE.md",
+        "STYLEGUIDE.md",
+        "CONTRIBUTING.md",
+    )
+    parts: list[str] = []
+    budget = 8000
+    for name in candidates:
         p = Path(name)
-        if p.exists() and p.is_file():
-            try:
-                return p.read_text()[:8000]
-            except Exception:
-                continue
-    return ""
+        if not (p.exists() and p.is_file()):
+            continue
+        try:
+            text = p.read_text()
+        except Exception:
+            continue
+        # Concatenate up to the budget so a repo with both REVIEW.md AND
+        # AI_CONTEXT.md gets BOTH in the prompt, not just whichever wins
+        # the priority race.
+        remaining = budget - sum(len(s) for s in parts)
+        if remaining <= 200:
+            break
+        snippet = text[:remaining]
+        parts.append(f"\n\n## {name}\n\n{snippet}")
+    return "".join(parts).strip()
 
 
 def _match_path_instructions(path: str, cfg: Config) -> str:

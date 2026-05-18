@@ -34,6 +34,17 @@ dev = [
 [project.scripts]
 pr-reviewer = "src.__main__:cli"
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# Make `pip install -e .` discover the src/ package without relying on
+# auto-detection (which silently does nothing for un-prefixed src layouts
+# and would leave the package un-importable except via PYTHONPATH).
+where = ["."]
+include = ["src*"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"
