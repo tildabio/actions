@@ -198,17 +198,38 @@ def post_review(
     submitting the summary review without inline comments, then attach the
     inline findings as standalone review comments one at a time (skipping any
     individual comment that GitHub still rejects).
+
+    GitHub also forbids APPROVE / REQUEST_CHANGES on a PR opened by the same
+    user as the reviewer (which happens when the bot uses a PAT whose owner
+    also raised the PR). When we detect that specific error we downgrade the
+    event to COMMENT and retry.
     """
-    return (
-        _try_submit_review(repo, pr_number, head_sha, body, inline_comments, event)
-        or _fallback_split_submit(repo, pr_number, head_sha, body, inline_comments, event)
+    rid, downgraded_event = _try_submit_review(
+        repo, pr_number, head_sha, body, inline_comments, event,
     )
+    if rid is not None:
+        return rid
+    return _fallback_split_submit(
+        repo, pr_number, head_sha, body, inline_comments, downgraded_event,
+    )
+
+
+_SELF_REVIEW_ERRORS = (
+    "Can not request changes on your own pull request",
+    "Can not approve your own pull request",
+)
 
 
 def _try_submit_review(
     repo: str, pr_number: int, head_sha: str,
     body: str, inline_comments: list[dict], event: str,
-) -> int | None:
+) -> tuple[int | None, str]:
+    """Submit the review. Returns (review_id_or_None, event_for_retry).
+
+    If GitHub rejects APPROVE/REQUEST_CHANGES because the reviewer is the
+    PR author, retry once with event=COMMENT and surface that downgrade
+    to the caller so the fallback path also uses COMMENT.
+    """
     payload = {
         "commit_id": head_sha,
         "body": body,
@@ -222,17 +243,43 @@ def _try_submit_review(
         input=json.dumps(payload),
         capture_output=True, text=True,
     )
-    if r.returncode != 0:
-        n = len(inline_comments)
-        log.error(
-            "review submit failed (n_inline=%d): stderr=%s | stdout=%s",
-            n, r.stderr.strip()[:1500], r.stdout.strip()[:1500],
+    if r.returncode == 0:
+        try:
+            return json.loads(r.stdout).get("id"), event
+        except Exception:
+            return None, event
+
+    n = len(inline_comments)
+    stdout, stderr = r.stdout.strip()[:1500], r.stderr.strip()[:1500]
+    log.error(
+        "review submit failed (n_inline=%d, event=%s): stderr=%s | stdout=%s",
+        n, event, stderr, stdout,
+    )
+
+    # Self-review on a PR opened by the same user as the token: GitHub
+    # forbids APPROVE / REQUEST_CHANGES. Downgrade to COMMENT and retry.
+    if event != "COMMENT" and any(m in stdout for m in _SELF_REVIEW_ERRORS):
+        log.info("Downgrading event %s → COMMENT (self-PR) and retrying", event)
+        payload["event"] = "COMMENT"
+        r2 = subprocess.run(
+            ["gh", "api", "--method", "POST",
+             f"repos/{repo}/pulls/{pr_number}/reviews",
+             "--input", "-"],
+            input=json.dumps(payload),
+            capture_output=True, text=True,
         )
-        return None
-    try:
-        return json.loads(r.stdout).get("id")
-    except Exception:
-        return None
+        if r2.returncode == 0:
+            try:
+                return json.loads(r2.stdout).get("id"), "COMMENT"
+            except Exception:
+                return None, "COMMENT"
+        log.error(
+            "retry as COMMENT also failed: stderr=%s | stdout=%s",
+            r2.stderr.strip()[:1500], r2.stdout.strip()[:1500],
+        )
+        return None, "COMMENT"
+
+    return None, event
 
 
 def _fallback_split_submit(
@@ -242,7 +289,7 @@ def _fallback_split_submit(
     """Post the summary review with no comments, then attach each inline as a
     separate review comment. Slower but resilient to a single bad line."""
     log.info("Falling back to split submission: summary review + per-comment")
-    review_id = _try_submit_review(repo, pr_number, head_sha, body, [], event)
+    review_id, _ = _try_submit_review(repo, pr_number, head_sha, body, [], event)
     if review_id is None:
         # Even the summary failed; degrade to a plain PR comment.
         log.error("Summary review also failed; degrading to plain PR comment")

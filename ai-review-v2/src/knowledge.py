@@ -139,18 +139,23 @@ def search_learnings(
     Marks retrieved learnings as used (updates last_used_at, increments usage_count).
     """
     blob = _vec_to_blob(query_embedding)
+    k = limit * 3  # over-fetch; post-filter by file_pattern below
+    # sqlite-vec's KNN syntax requires an explicit `k = ?` constraint on
+    # the vec table (a plain LIMIT clause is not enough when the vec table
+    # is joined). The application-level filters and ORDER BY apply after
+    # the KNN candidate set is built.
     rows = conn.execute(
         """
         SELECT l.*, vec.distance
         FROM learnings_vec vec
         JOIN learnings l ON l.id = vec.learning_id
         WHERE vec.embedding MATCH ?
+          AND k = ?
           AND l.active = 1
           AND (l.scope = 'global' OR (l.scope IN ('org', 'repo') AND l.repo = ?))
         ORDER BY vec.distance ASC
-        LIMIT ?
         """,
-        (blob, repo, limit * 3),  # over-fetch, post-filter by file_pattern
+        (blob, k, repo),
     ).fetchall()
 
     out: list[Learning] = []
