@@ -405,6 +405,28 @@ def _format_finding(f: dict, prefix: str = "") -> str:
     return "\n\n".join(parts)
 
 
+def _strip_code_fence(text: str) -> str:
+    """Strip an outer ```lang ... ``` fence if the LLM included one.
+
+    Models sometimes return `sequence_diagram` already wrapped in a
+    ```mermaid fence. Our caller then wraps it AGAIN, producing
+    nested fences that GitHub renders as plain text instead of a
+    rendered mermaid diagram. Normalize to plain inner content.
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    # Drop the opening fence line (e.g. ```mermaid or ```)
+    first_newline = s.find("\n")
+    if first_newline == -1:
+        return s  # malformed; leave it
+    s = s[first_newline + 1 :]
+    # Drop a trailing fence if present
+    if s.rstrip().endswith("```"):
+        s = s.rstrip()[: -len("```")]
+    return s.rstrip()
+
+
 def _build_summary_md(summary: dict, file_findings: dict, cross: dict,
                       dropped: list[tuple[str, dict]]) -> str:
     total = sum(len(fr.get("findings", [])) for fr in file_findings.values())
@@ -422,7 +444,7 @@ def _build_summary_md(summary: dict, file_findings: dict, cross: dict,
     if summary.get("walkthrough"):
         out += ["### Walkthrough", summary["walkthrough"], ""]
     if summary.get("sequence_diagram"):
-        out += ["### Flow", "```mermaid", summary["sequence_diagram"], "```", ""]
+        out += ["### Flow", "```mermaid", _strip_code_fence(summary["sequence_diagram"]), "```", ""]
     if summary.get("suggested_reviewers_focus"):
         out += ["### Reviewer focus", summary["suggested_reviewers_focus"], ""]
 

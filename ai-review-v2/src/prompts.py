@@ -110,7 +110,7 @@ Output JSON:
 {{
   "tldr": "2-3 sentences. What does this change do, factually? Concrete verbs, no 'this PR adds support for'.",
   "walkthrough": "Markdown table | File | Change |. One row per significant file. 'Adds exponential-backoff retry in fetch_user()' not 'Updates user fetching'.",
-  "sequence_diagram": "Mermaid sequenceDiagram code IF the PR introduces a new multi-component interaction. Else null.",
+  "sequence_diagram": "Mermaid sequenceDiagram source IF the PR introduces a new multi-component interaction; else null. Output the raw mermaid source ONLY (start with the literal text `sequenceDiagram`). DO NOT wrap it in ```mermaid fences — the wrapper adds those.",
   "risk_areas": ["short phrases naming risky parts"],
   "suggested_reviewers_focus": "1-2 sentences telling a human reviewer where to spend attention."
 }}"""
