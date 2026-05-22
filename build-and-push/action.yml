@@ -1,91 +1,123 @@
 name: "Build and Push to Google Artifactory"
-description: "Build a docker container and publish it to Google Artifactory."
+description: >
+  Build a docker container with buildx + GitHub Actions cache and optionally
+  publish it to Google Artifact Registry. Caller is responsible for checking
+  out the repository before invoking this action.
 inputs:
   google-key:
-    description: "Key to authenticate gcloud"
+    description: "GCP service-account JSON key used to authenticate gcloud"
     required: true
   service-name:
-    description: "service name"
+    description: "Image name (used as registry path leaf and as cache scope)"
     required: true
   google-project:
-    description: "GCP project to use"
+    description: "GCP project to push to"
     required: false
     default: "tilda-dev-325721"
   context:
-    description: "Path to the docker context"
+    description: "Path to the docker build context"
     required: false
-    default: .
+    default: "."
   file:
-    description: "Path to Dockerfile"
+    description: "Path to the Dockerfile"
     required: false
-    default: Dockerfile
+    default: "Dockerfile"
   push:
-    description: "Whether to push the image to artifactory or not"
+    description: "Whether to push the built image (string 'true' or 'false')"
     required: false
-    type: boolean
-    default: true
+    default: "true"
   artifactory-url:
-    description: "url"
+    description: "Artifact Registry host"
     required: false
-    default: us-central1-docker.pkg.dev
+    default: "us-central1-docker.pkg.dev"
   target:
-    description: "Sets the target stage to build"
+    description: "Target stage to build"
     required: false
+    default: ""
   build_args:
-    description: 'Additional build arguments as a string'
+    description: "Additional build arguments, newline-separated"
     required: false
+    default: ""
+  cache:
+    description: "Enable buildx GitHub Actions layer cache (string 'true'/'false')"
+    required: false
+    default: "true"
+  cache-scope:
+    description: "Override cache scope (defaults to service-name)"
+    required: false
+    default: ""
 outputs:
   image:
-    description: "Build docker image"
-    value: testing custom action
+    description: "Fully-qualified image reference that was built (registry/project/path:tag)"
+    value: ${{ steps.meta.outputs.tags }}
+  digest:
+    description: "Image digest of the built image"
+    value: ${{ steps.build.outputs.digest }}
+  version:
+    description: "Image version tag (the short SHA part)"
+    value: ${{ steps.meta.outputs.version }}
 runs:
   using: "composite"
   steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+    # Backwards-compat: ensure the workspace is checked out even if the
+    # caller didn't do its own checkout. `clean: false` is idempotent for
+    # callers that already checked out (the action's matrix jobs in
+    # build-all/dependabot-verify do their own checkout for resolve-base).
+    - name: Ensure repo checked out
+      uses: actions/checkout@v4
       with:
         clean: false
 
-    - name: Repo Name
-      id: repo-name
-      uses: frabert/replace-string-action@v2.0
-      with:
-        string: ${{ github.repository }}
-        pattern: ${{ github.repository_owner }}/
-        replace-with: ""
-
-    - uses: google-github-actions/auth@v1
+    - name: Authenticate to Google Cloud
       if: github.event.pull_request.user.login != 'dependabot[bot]'
+      uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ inputs.google-key }}
 
-    # Setup gcloud CLI
-    - uses: google-github-actions/setup-gcloud@v1
+    - name: Set up gcloud
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      uses: google-github-actions/setup-gcloud@v2
 
-    # Configure docker to use the gcloud command-line tool as a credential helper
-    - run: gcloud auth configure-docker ${{ inputs.artifactory-url }}
+    - name: Configure docker for Artifact Registry
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
       shell: bash
+      run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
 
-    - name: Docker meta
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Compute image metadata
       id: meta
-      uses: docker/metadata-action@v4
+      uses: docker/metadata-action@v5
       with:
         images: |
           ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
         tags: |
-          type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name}}-,suffix=,format=short
+          type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name }}-,suffix=,format=short
 
-    - uses: docker/build-push-action@v2
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@v6
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
-        builder: ${{ steps.buildx.outputs.name }}
-        push: ${{ inputs.push }}
+        push: ${{ inputs.push == 'true' }}
         tags: ${{ steps.meta.outputs.tags }}
         target: ${{ inputs.target }}
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
           ${{ inputs.build_args }}
+        cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name) || '' }}
 
-    - run: echo ${{ steps.meta.outputs.tags }} >> $GITHUB_STEP_SUMMARY
+    - name: Summarize
       shell: bash
+      run: |
+        {
+          echo "### ${{ inputs.service-name }}"
+          echo ""
+          echo "- **Image**: \`${{ steps.meta.outputs.tags }}\`"
+          echo "- **Digest**: \`${{ steps.build.outputs.digest }}\`"
+          echo "- **Pushed**: \`${{ inputs.push }}\`"
+          echo "- **Cache scope**: \`${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name }}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
