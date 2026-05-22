@@ -59,6 +59,15 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Backwards-compat: ensure the workspace is checked out even if the
+    # caller didn't do its own checkout. `clean: false` is idempotent for
+    # callers that already checked out (the action's matrix jobs in
+    # build-all/dependabot-verify do their own checkout for resolve-base).
+    - name: Ensure repo checked out
+      uses: actions/checkout@v4
+      with:
+        clean: false
+
     - name: Authenticate to Google Cloud
       if: github.event.pull_request.user.login != 'dependabot[bot]'
       uses: google-github-actions/auth@v2
