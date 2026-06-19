@@ -1,6 +1,6 @@
 name: "Build and Push to Google Artifactory"
 description: >
-  Build a docker container with buildx + GitHub Actions cache and optionally
+  Build a docker container with buildx + registry-backed layer cache and optionally
   publish it to Google Artifact Registry. Caller is responsible for checking
   out the repository before invoking this action.
 inputs:
@@ -107,8 +107,17 @@ runs:
         build-args: |
           BUILDARG_VERSION=${{ steps.meta.outputs.version }}
           ${{ inputs.build_args }}
-        cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name) || '' }}
+        # Registry-backed layer cache (one :buildcache tag per service repo).
+        # Replaces type=gha, which was over GitHub's 10 GB Actions-cache limit
+        # (~20 services x mode=max ~= 12+ GB) so caches were LRU-evicted before
+        # reuse -> 0% hits. Registry cache has no such cap and is shared across
+        # branches. image-manifest/oci-mediatypes are required for GAR.
+        # Only WRITE on push builds (PR/dependabot builds lack push creds); all
+        # builds READ the shared cache. ignore-error=true makes a cache-export
+        # failure non-fatal — the build always succeeds, so the worst case is
+        # "no caching" (today's behaviour), never a broken pipeline.
+        cache-from: ${{ inputs.cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
 
     - name: Summarize
       shell: bash
@@ -119,5 +128,5 @@ runs:
           echo "- **Image**: \`${{ steps.meta.outputs.tags }}\`"
           echo "- **Digest**: \`${{ steps.build.outputs.digest }}\`"
           echo "- **Pushed**: \`${{ inputs.push }}\`"
-          echo "- **Cache scope**: \`${{ inputs.cache-scope != '' && inputs.cache-scope || inputs.service-name }}\`"
+          echo "- **Cache**: \`registry (${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:buildcache)\`"
         } >> "$GITHUB_STEP_SUMMARY"
