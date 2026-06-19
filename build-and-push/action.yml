@@ -113,9 +113,11 @@ runs:
         # reuse -> 0% hits. Registry cache has no such cap and is shared across
         # branches. image-manifest/oci-mediatypes are required for GAR.
         # Only WRITE on push builds (PR/dependabot builds lack push creds); all
-        # builds READ the shared cache.
+        # builds READ the shared cache. ignore-error=true makes a cache-export
+        # failure non-fatal — the build always succeeds, so the worst case is
+        # "no caching" (today's behaviour), never a broken pipeline.
         cache-from: ${{ inputs.cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
 
     - name: Summarize
       shell: bash
