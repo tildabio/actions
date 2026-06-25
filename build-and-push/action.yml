@@ -121,7 +121,7 @@ runs:
     # what makes compiles fast, so dropping the module cache is a clean win.
     - name: Go cache — restore + save (default branch)
       id: go-cache-rw
-      if: inputs.cache == 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/ci/build-cache-experiment')
+      if: inputs.cache == 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
       uses: actions/cache@v6
       with:
         path: go-build-cache
@@ -131,7 +131,7 @@ runs:
 
     - name: Go cache — restore only (non-default branches)
       id: go-cache-ro
-      if: inputs.cache == 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/ci/build-cache-experiment')
+      if: inputs.cache == 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
       uses: actions/cache/restore@v6
       with:
         path: go-build-cache
