@@ -134,7 +134,6 @@ runs:
       if: inputs.cache == 'true'
       uses: reproducible-containers/buildkit-cache-dance@v3.1.2
       with:
-        builder: ${{ steps.buildx.outputs.name }}
         cache-map: |
           {
             "go-build-cache": "/root/.cache/go-build",
