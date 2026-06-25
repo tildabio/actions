@@ -92,21 +92,40 @@ runs:
     # Dockerfiles. Those mounts are NOT exported by cache-to (registry or gha),
     # so on ubuntu-latest they start cold every run. buildkit-cache-dance
     # round-trips the mount dirs through actions/cache: restore before build
-    # (warm compile) and extract+save after. One shared key across all Go
-    # services — GOCACHE is content-addressed and safe to share, and a single
-    # entry keeps us under GitHub's 10 GB cache cap.
-    - name: Restore Go build/module cache
-      id: go-cache
-      if: inputs.cache == 'true'
+    # (warm compile) and extract+save after.
+    #
+    # SAVE only on the default branch; every other branch RESTORES from it.
+    # Without this, every feature branch would persist its own ~6 GB of Go
+    # caches and the repo would blow past GitHub's 10 GB cache cap within days.
+    # GHA lets any branch read the default-branch cache, so PRs still build warm.
+    # Per-service key (not shared): a shared key races across the build matrix —
+    # the first job to finish saves and the rest skip, so a Python service (no
+    # Go mounts) would poison it with an empty cache.
+    #
+    # ORDERING: both cache steps are declared BEFORE cache-dance so, in the
+    # reverse-ordered post phase, cache-dance extracts the mounts into the host
+    # dirs FIRST and only then does actions/cache save them. actions/cache/save
+    # has no post step, so the restore-only branch never writes a cache entry.
+    - name: Go cache — restore + save (default branch)
+      id: go-cache-rw
+      if: inputs.cache == 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/ci/build-cache-experiment')
       uses: actions/cache@v4
       with:
         path: |
           go-build-cache
           go-mod-cache
-        # Per-service key: a shared key races across the build matrix — whichever
-        # job finishes first saves and the rest skip, so a Python service (no Go
-        # mounts) would poison the shared key with an empty cache. Scoping by
-        # service makes each Go service persist and restore its own cache.
+        key: gocache-${{ inputs.cache-scope || inputs.service-name }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gocache-${{ inputs.cache-scope || inputs.service-name }}-
+
+    - name: Go cache — restore only (non-default branches)
+      id: go-cache-ro
+      if: inputs.cache == 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/ci/build-cache-experiment')
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          go-build-cache
+          go-mod-cache
         key: gocache-${{ inputs.cache-scope || inputs.service-name }}-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           gocache-${{ inputs.cache-scope || inputs.service-name }}-
@@ -121,7 +140,10 @@ runs:
             "go-build-cache": "/root/.cache/go-build",
             "go-mod-cache": "/go/pkg/mod"
           }
-        skip-extraction: ${{ steps.go-cache.outputs.cache-hit }}
+        # Skip the (post-phase) extraction unless we intend to save: on non-default
+        # branches there is nothing to write, and on the default branch skip when
+        # the key already hit (nothing changed to re-save).
+        skip-extraction: ${{ steps.go-cache-rw.outputs.cache-hit == 'true' || steps.go-cache-ro.conclusion == 'success' }}
 
     - name: Compute image metadata
       id: meta
