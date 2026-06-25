@@ -184,15 +184,3 @@ runs:
         # "no caching" (today's behaviour), never a broken pipeline.
         cache-from: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
         cache-to: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
-
-    - name: Summarize
-      shell: bash
-      run: |
-        {
-          echo "### ${{ inputs.service-name }}"
-          echo ""
-          echo "- **Image**: \`${{ steps.meta.outputs.tags }}\`"
-          echo "- **Digest**: \`${{ steps.build.outputs.digest }}\`"
-          echo "- **Pushed**: \`${{ inputs.push }}\`"
-          echo "- **Cache**: \`registry (${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:buildcache)\`"
-        } >> "$GITHUB_STEP_SUMMARY"
