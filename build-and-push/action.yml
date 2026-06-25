@@ -46,6 +46,14 @@ inputs:
     description: "Override cache scope (defaults to service-name)"
     required: false
     default: ""
+  registry-cache:
+    description: >
+      Use the registry-backed layer cache (cache-from/to :buildcache). Keep ON
+      for services whose layers are the cache (e.g. Python pip/uv builds). Turn
+      OFF for Go services — buildkit-cache-dance already persists the heavy
+      GOCACHE/module mounts, so the registry import is redundant (~34s/job).
+    required: false
+    default: "true"
 outputs:
   image:
     description: "Fully-qualified image reference that was built (registry/project/path:tag)"
@@ -174,8 +182,8 @@ runs:
         # builds READ the shared cache. ignore-error=true makes a cache-export
         # failure non-fatal — the build always succeeds, so the worst case is
         # "no caching" (today's behaviour), never a broken pipeline.
-        cache-from: ${{ inputs.cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-from: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
 
     - name: Summarize
       shell: bash
