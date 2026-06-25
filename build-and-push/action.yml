@@ -68,20 +68,24 @@ runs:
       with:
         clean: false
 
+    # Auth for Artifact Registry. We only need a docker login here, so mint a
+    # short-lived access token and use docker/login-action instead of installing
+    # the full gcloud SDK (setup-gcloud was ~23s/job of pure overhead).
     - name: Authenticate to Google Cloud
+      id: auth
       if: github.event.pull_request.user.login != 'dependabot[bot]'
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ inputs.google-key }}
+        token_format: access_token
 
-    - name: Set up gcloud
+    - name: Log in to Artifact Registry
       if: github.event.pull_request.user.login != 'dependabot[bot]'
-      uses: google-github-actions/setup-gcloud@v2
-
-    - name: Configure docker for Artifact Registry
-      if: github.event.pull_request.user.login != 'dependabot[bot]'
-      shell: bash
-      run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.artifactory-url }}
+        username: oauth2accesstoken
+        password: ${{ steps.auth.outputs.access_token }}
 
     - name: Set up Docker Buildx
       id: buildx
