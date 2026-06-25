@@ -46,6 +46,14 @@ inputs:
     description: "Override cache scope (defaults to service-name)"
     required: false
     default: ""
+  registry-cache:
+    description: >
+      Use the registry-backed layer cache (cache-from/to :buildcache). Keep ON
+      for services whose layers are the cache (e.g. Python pip/uv builds). Turn
+      OFF for Go services — buildkit-cache-dance already persists the heavy
+      GOCACHE/module mounts, so the registry import is redundant (~34s/job).
+    required: false
+    default: "true"
 outputs:
   image:
     description: "Fully-qualified image reference that was built (registry/project/path:tag)"
@@ -64,19 +72,19 @@ runs:
     # callers that already checked out (the action's matrix jobs in
     # build-all/dependabot-verify do their own checkout for resolve-base).
     - name: Ensure repo checked out
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         clean: false
 
     - name: Authenticate to Google Cloud
       if: github.event.pull_request.user.login != 'dependabot[bot]'
-      uses: google-github-actions/auth@v2
+      uses: google-github-actions/auth@v3
       with:
         credentials_json: ${{ inputs.google-key }}
 
     - name: Set up gcloud
       if: github.event.pull_request.user.login != 'dependabot[bot]'
-      uses: google-github-actions/setup-gcloud@v2
+      uses: google-github-actions/setup-gcloud@v3
 
     - name: Configure docker for Artifact Registry
       if: github.event.pull_request.user.login != 'dependabot[bot]'
@@ -84,11 +92,69 @@ runs:
       run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      id: buildx
+      uses: docker/setup-buildx-action@v4
+
+    # ── Persist BuildKit cache mounts across ephemeral runners ──────────────
+    # The Go build/module cache lives in --mount=type=cache mounts inside the
+    # Dockerfiles. Those mounts are NOT exported by cache-to (registry or gha),
+    # so on ubuntu-latest they start cold every run. buildkit-cache-dance
+    # round-trips the mount dirs through actions/cache: restore before build
+    # (warm compile) and extract+save after.
+    #
+    # SAVE only on the default branch; every other branch RESTORES from it.
+    # Without this, every feature branch would persist its own ~6 GB of Go
+    # caches and the repo would blow past GitHub's 10 GB cache cap within days.
+    # GHA lets any branch read the default-branch cache, so PRs still build warm.
+    # Per-service key (not shared): a shared key races across the build matrix —
+    # the first job to finish saves and the rest skip, so a Python service (no
+    # Go mounts) would poison it with an empty cache.
+    #
+    # ORDERING: both cache steps are declared BEFORE cache-dance so, in the
+    # reverse-ordered post phase, cache-dance extracts the mounts into the host
+    # dirs FIRST and only then does actions/cache save them. actions/cache/save
+    # has no post step, so the restore-only branch never writes a cache entry.
+    # Only the go-build (compiled) cache is danced. The Go *module* cache is NOT —
+    # Go marks downloaded modules read-only (0444), so cache-dance's extract+clean
+    # hits EACCES on rmdir and logs a noisy "Ignoring…" notice per service. Modules
+    # are cheap to re-fetch (pinned by go.sum, ~15s) and the warm go-build cache is
+    # what makes compiles fast, so dropping the module cache is a clean win.
+    - name: Go cache — restore + save (default branch)
+      id: go-cache-rw
+      if: inputs.cache == 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      uses: actions/cache@v6
+      with:
+        path: go-build-cache
+        key: gocache-${{ inputs.cache-scope || inputs.service-name }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gocache-${{ inputs.cache-scope || inputs.service-name }}-
+
+    - name: Go cache — restore only (non-default branches)
+      id: go-cache-ro
+      if: inputs.cache == 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      uses: actions/cache/restore@v6
+      with:
+        path: go-build-cache
+        key: gocache-${{ inputs.cache-scope || inputs.service-name }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gocache-${{ inputs.cache-scope || inputs.service-name }}-
+
+    - name: Inject Go cache into BuildKit
+      if: inputs.cache == 'true'
+      uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+      with:
+        cache-map: |
+          {
+            "go-build-cache": "/root/.cache/go-build"
+          }
+        # Skip the (post-phase) extraction unless we intend to save: on non-default
+        # branches there is nothing to write, and on the default branch skip when
+        # the key already hit (nothing changed to re-save).
+        skip-extraction: ${{ steps.go-cache-rw.outputs.cache-hit == 'true' || steps.go-cache-ro.conclusion == 'success' }}
 
     - name: Compute image metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: |
           ${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}
@@ -97,7 +163,12 @@ runs:
 
     - name: Build and push
       id: build
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
+      env:
+        # Suppress build-push-action's own per-job "Docker Build summary" block and
+        # the .dockerbuild record artifact — the caller emits ONE consolidated table.
+        DOCKER_BUILD_SUMMARY: "false"
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
@@ -116,17 +187,5 @@ runs:
         # builds READ the shared cache. ignore-error=true makes a cache-export
         # failure non-fatal — the build always succeeds, so the worst case is
         # "no caching" (today's behaviour), never a broken pipeline.
-        cache-from: ${{ inputs.cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
-
-    - name: Summarize
-      shell: bash
-      run: |
-        {
-          echo "### ${{ inputs.service-name }}"
-          echo ""
-          echo "- **Image**: \`${{ steps.meta.outputs.tags }}\`"
-          echo "- **Digest**: \`${{ steps.build.outputs.digest }}\`"
-          echo "- **Pushed**: \`${{ inputs.push }}\`"
-          echo "- **Cache**: \`registry (${{ inputs.artifactory-url }}/${{ inputs.google-project }}/artifacts/services/${{ inputs.service-name }}:buildcache)\`"
-        } >> "$GITHUB_STEP_SUMMARY"
+        cache-from: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
