@@ -84,7 +84,40 @@ runs:
       run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
 
     - name: Set up Docker Buildx
+      id: buildx
       uses: docker/setup-buildx-action@v3
+
+    # ── Persist BuildKit cache mounts across ephemeral runners ──────────────
+    # The Go build/module cache lives in --mount=type=cache mounts inside the
+    # Dockerfiles. Those mounts are NOT exported by cache-to (registry or gha),
+    # so on ubuntu-latest they start cold every run. buildkit-cache-dance
+    # round-trips the mount dirs through actions/cache: restore before build
+    # (warm compile) and extract+save after. One shared key across all Go
+    # services — GOCACHE is content-addressed and safe to share, and a single
+    # entry keeps us under GitHub's 10 GB cache cap.
+    - name: Restore Go build/module cache
+      id: go-cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          go-build-cache
+          go-mod-cache
+        key: gocache-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gocache-
+
+    - name: Inject Go cache into BuildKit
+      if: inputs.cache == 'true'
+      uses: reproducible-containers/buildkit-cache-dance@v3.1.2
+      with:
+        builder: ${{ steps.buildx.outputs.name }}
+        cache-map: |
+          {
+            "go-build-cache": "/root/.cache/go-build",
+            "go-mod-cache": "/go/pkg/mod"
+          }
+        skip-extraction: ${{ steps.go-cache.outputs.cache-hit }}
 
     - name: Compute image metadata
       id: meta
