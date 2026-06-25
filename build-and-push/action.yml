@@ -68,18 +68,20 @@ runs:
       with:
         clean: false
 
-    # Auth for Artifact Registry. We only need a docker login here, so log in
-    # directly with the SA key JSON (_json_key) instead of installing the full
-    # gcloud SDK (setup-gcloud was ~23s/job of pure overhead). _json_key avoids
-    # the IAM generateAccessToken call (token_format: access_token) that the
-    # build SA isn't permitted to make.
-    - name: Log in to Artifact Registry
+    - name: Authenticate to Google Cloud
       if: github.event.pull_request.user.login != 'dependabot[bot]'
-      uses: docker/login-action@v3
+      uses: google-github-actions/auth@v2
       with:
-        registry: ${{ inputs.artifactory-url }}
-        username: _json_key
-        password: ${{ inputs.google-key }}
+        credentials_json: ${{ inputs.google-key }}
+
+    - name: Set up gcloud
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure docker for Artifact Registry
+      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      shell: bash
+      run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
 
     - name: Set up Docker Buildx
       id: buildx
