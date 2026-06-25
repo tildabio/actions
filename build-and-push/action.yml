@@ -103,9 +103,13 @@ runs:
         path: |
           go-build-cache
           go-mod-cache
-        key: gocache-${{ hashFiles('**/go.sum') }}
+        # Per-service key: a shared key races across the build matrix — whichever
+        # job finishes first saves and the rest skip, so a Python service (no Go
+        # mounts) would poison the shared key with an empty cache. Scoping by
+        # service makes each Go service persist and restore its own cache.
+        key: gocache-${{ inputs.cache-scope || inputs.service-name }}-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          gocache-
+          gocache-${{ inputs.cache-scope || inputs.service-name }}-
 
     - name: Inject Go cache into BuildKit
       if: inputs.cache == 'true'
