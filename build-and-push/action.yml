@@ -164,6 +164,11 @@ runs:
     - name: Build and push
       id: build
       uses: docker/build-push-action@v7
+      env:
+        # Suppress build-push-action's own per-job "Docker Build summary" block and
+        # the .dockerbuild record artifact — the caller emits ONE consolidated table.
+        DOCKER_BUILD_SUMMARY: "false"
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.file }}
