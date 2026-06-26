@@ -1,0 +1,24 @@
+name: Required Check
+
+# No-op status check that always succeeds. The actions repo has no build/test
+# pipeline of its own, but Vanta's change-management control requires a passing
+# status check before anything merges to the default branch. This gives branch
+# protection a stable check context ("Required Check") to require.
+#
+# Mark it required: Settings -> Branches -> main -> Require status checks ->
+# add "Required Check".
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  required-check:
+    name: Required Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pass
+        run: echo "✅ Required check passed."
