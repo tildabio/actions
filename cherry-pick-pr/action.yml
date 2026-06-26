@@ -10,8 +10,24 @@ inputs:
     description: 'Branch to cherry-pick into (e.g., production, master, staging)'
     required: true
   github-token:
-    description: 'GitHub token for API operations (use secrets.GH_PAT or secrets.GITHUB_TOKEN)'
+    description: >
+      GitHub token for API operations. Prefer a GitHub App installation token
+      (e.g. via actions/create-github-app-token) so the cherry-pick PR and its
+      commits are attributed to a bot identity rather than a person's PAT.
     required: true
+  committer:
+    description: >
+      Committer identity for the cherry-pick commit, as `Display Name <email>`.
+      Defaults to the GitHub Actions bot so automation is not attributed to a person.
+    required: false
+    default: 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+  author:
+    description: >
+      Author identity for the cherry-pick commit, as `Display Name <email>`.
+      Defaults to the original PR author so contribution analytics credit the
+      developer who wrote the change rather than whoever merged it.
+    required: false
+    default: '${{ github.event.pull_request.user.login }} <${{ github.event.pull_request.user.id }}+${{ github.event.pull_request.user.login }}@users.noreply.github.com>'
   pr-body:
     description: 'The PR body text to check for merge decision'
     required: true
@@ -137,6 +153,8 @@ runs:
       uses: carloscastrojumo/github-cherry-pick-action@v1.0.9
       with:
         token: ${{ inputs.github-token }}
+        committer: ${{ inputs.committer }}
+        author: ${{ inputs.author }}
         branch: ${{ inputs.target-branch }}
         cherry-pick-branch: ${{ inputs.cherry-pick-branch-prefix }}${{ github.event.pull_request.head.ref }}
         body: ${{ inputs.cherry-pick-pr-body }}
