@@ -60,7 +60,8 @@ outputs:
     value: ${{ steps.meta.outputs.tags }}
   digest:
     description: "Image digest of the built image"
-    value: ${{ steps.build.outputs.digest }}
+    # Falls back to the retry attempt when the first build hit a transient flake.
+    value: ${{ steps.build.outputs.digest || steps.build-retry.outputs.digest }}
   version:
     description: "Image version tag (the short SHA part)"
     value: ${{ steps.meta.outputs.version }}
@@ -94,6 +95,16 @@ runs:
     - name: Set up Docker Buildx
       id: buildx
       uses: docker/setup-buildx-action@v4
+      with:
+        # Run the buildkitd container on the host network. The common CI failure
+        # is `failed to authorize: DeadlineExceeded` while BuildKit fetches base-
+        # image metadata from Artifact Registry — a slow registry-auth round-trip,
+        # not a build error (re-runs always pass). The default bridge network adds
+        # a NAT hop that can push a momentarily-slow GAR token fetch past its
+        # deadline; host networking removes it. This is the lever that actually
+        # moves the auth-timeout flake.
+        driver-opts: |
+          network=host
 
     # ── Persist BuildKit cache mounts across ephemeral runners ──────────────
     # The Go build/module cache lives in --mount=type=cache mounts inside the
@@ -161,8 +172,15 @@ runs:
         tags: |
           type=sha,enable=true,priority=100,prefix=${{ github.head_ref || github.ref_name }}-,suffix=,format=short
 
+    # First build attempt. `continue-on-error` so a transient Artifact Registry
+    # flake (e.g. `failed to authorize: DeadlineExceeded` fetching base-image
+    # metadata) does NOT fail the job — the retry step below re-runs it. A real
+    # build error reproduces on the retry and fails for real, so this never masks
+    # genuine breakage; it only absorbs the one-off network/auth flakes that a
+    # manual "re-run failed jobs" would have papered over anyway.
     - name: Build and push
       id: build
+      continue-on-error: true
       uses: docker/build-push-action@v7
       env:
         # Suppress build-push-action's own per-job "Docker Build summary" block and
@@ -187,5 +205,30 @@ runs:
         # builds READ the shared cache. ignore-error=true makes a cache-export
         # failure non-fatal — the build always succeeds, so the worst case is
         # "no caching" (today's behaviour), never a broken pipeline.
+        cache-from: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
+
+    # Retry once, ONLY if the first attempt failed. A transient registry/auth
+    # flake clears on the second try (this is what a manual "re-run failed jobs"
+    # did before); a genuine build error reproduces here and fails the job for
+    # real — so this self-heals flakes without ever hiding true breakage. The
+    # second run reuses the warm layer/registry cache from the first, so it's
+    # cheap. No `continue-on-error` here: this attempt is authoritative.
+    - name: Build and push (retry on transient failure)
+      id: build-retry
+      if: steps.build.outcome == 'failure'
+      uses: docker/build-push-action@v7
+      env:
+        DOCKER_BUILD_SUMMARY: "false"
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        push: ${{ inputs.push == 'true' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        target: ${{ inputs.target }}
+        build-args: |
+          BUILDARG_VERSION=${{ steps.meta.outputs.version }}
+          ${{ inputs.build_args }}
         cache-from: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
         cache-to: ${{ inputs.cache == 'true' && inputs.registry-cache == 'true' && inputs.push == 'true' && format('type=registry,ref={0}/{1}/artifacts/services/{2}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', inputs.artifactory-url, inputs.google-project, inputs.service-name) || '' }}
