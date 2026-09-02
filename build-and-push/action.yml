@@ -76,18 +76,27 @@ runs:
       with:
         clean: false
 
+    # Gate on the credential actually being present, not on who opened the PR.
+    # This was `github.event.pull_request.user.login != 'dependabot[bot]'` (added
+    # 2024-01-12), from a time when Dependabot PRs received no Actions secrets and
+    # google-github-actions/auth would hard-fail on an empty key. That premise no
+    # longer holds: Dependabot now runs on Actions runners here and its jobs are
+    # handed the same `google-key` as any other run. Skipping auth anyway left
+    # buildx with no registry credential, so any Dockerfile with a private
+    # Artifact Registry `FROM` fell back to an anonymous token and got a 403 --
+    # while public-base images built fine, making it look service-specific.
     - name: Authenticate to Google Cloud
-      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      if: inputs.google-key != ''
       uses: google-github-actions/auth@v3
       with:
         credentials_json: ${{ inputs.google-key }}
 
     - name: Set up gcloud
-      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      if: inputs.google-key != ''
       uses: google-github-actions/setup-gcloud@v3
 
     - name: Configure docker for Artifact Registry
-      if: github.event.pull_request.user.login != 'dependabot[bot]'
+      if: inputs.google-key != ''
       shell: bash
       run: gcloud auth configure-docker ${{ inputs.artifactory-url }} --quiet
 
@@ -183,7 +192,7 @@ runs:
         # (~20 services x mode=max ~= 12+ GB) so caches were LRU-evicted before
         # reuse -> 0% hits. Registry cache has no such cap and is shared across
         # branches. image-manifest/oci-mediatypes are required for GAR.
-        # Only WRITE on push builds (PR/dependabot builds lack push creds); all
+        # Only WRITE on push builds (PR builds don't publish an image); all
         # builds READ the shared cache. ignore-error=true makes a cache-export
         # failure non-fatal — the build always succeeds, so the worst case is
         # "no caching" (today's behaviour), never a broken pipeline.
