@@ -13,8 +13,11 @@ inputs:
     description: 'Tag to compare from, e.g. v2.10.23. Blank lets tildactl resolve the previous release tag'
     required: false
     default: ''
-  linear-access-key:
-    description: 'Linear PIPELINE access key (Settings > Releases > pipeline > access key). A personal API key will not work'
+  linear-api-key:
+    description: 'Linear API key or OAuth token (org secret LINEAR_API_KEY). Not a pipeline access key'
+    required: true
+  pipeline:
+    description: 'Linear release pipeline to publish into, by name or slug (e.g. "Sense Backend")'
     required: true
   openai-api-key:
     description: 'OpenAI key tildactl uses to write the note'
@@ -147,13 +150,19 @@ runs:
         path: ${{ steps.notes.outputs.notes-path }}
         if-no-files-found: error
 
+    # One releaseSync call: creates or updates the release, attaches the issues and PRs
+    # referenced in the same range the note describes, and upserts the note. Re-running a
+    # tag updates that release rather than adding another.
     - name: Publish to Linear
-      uses: linear/linear-release-action@v0
-      with:
-        access_key: ${{ inputs.linear-access-key }}
-        command: sync
-        version: ${{ inputs.new-tag }}
-        name: ${{ inputs.release-name-prefix }} ${{ inputs.new-tag }}
-        base_ref: ${{ steps.notes.outputs.old-tag }}
-        release_notes: ${{ steps.notes.outputs.notes-path }}
-        dry_run: ${{ inputs.dry-run }}
+      shell: bash
+      env:
+        LINEAR_API_KEY: ${{ inputs.linear-api-key }}
+        PIPELINE: ${{ inputs.pipeline }}
+        REPO_NAME: ${{ inputs.repo-name }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        NEW_TAG: ${{ inputs.new-tag }}
+        OLD_TAG: ${{ steps.notes.outputs.old-tag }}
+        NOTES_PATH: ${{ steps.notes.outputs.notes-path }}
+        RELEASE_NAME_PREFIX: ${{ inputs.release-name-prefix }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: python "${{ github.action_path }}/sync.py"
