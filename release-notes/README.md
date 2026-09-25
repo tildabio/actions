@@ -13,7 +13,7 @@ release pipeline, in one step.
     new-tag: ${{ github.ref_name }} # v2.10.24
     pipeline: Sense Backend         # Linear pipeline, by name or slug
     linear-api-key: ${{ secrets.LINEAR_API_KEY }}
-    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+    tilda-password: ${{ secrets.TILDA_SENSE_PASSWORD }}
     gh-token:       ${{ secrets.GH_TOKEN }}
 ```
 
@@ -24,6 +24,13 @@ release pipeline, in one step.
   generated per pipeline.
 - **`pipeline`** is resolved by name or slug at run time, so the workflow carries a
   readable name rather than a UUID and renaming a pipeline is a one-line change.
+- **No provider key.** The action runs `tildactl login -u tildasense@tilda.bio` — the
+  same login `build-all.yaml` and `swaggersvc.yaml` use — and points tildactl at the
+  LiteLLM gateway with `OPENAI_BASE_URL`. The OpenAI SDK reads that variable itself, so
+  nothing in tildactl changes. The bearer is the Auth0 id-token the login writes; Istio
+  validates it at `q99n.tilda.pizza` and an in-cluster sidecar attaches the real OpenAI
+  key, so no provider credential ever reaches CI. Usage is attributed to the logged-in
+  identity as `end_user`.
 - Turn **off** `Auto-generate release notes on completion` on the pipeline, or Linear's
   agent writes a second note alongside this one.
 
@@ -59,11 +66,24 @@ same range the note describes, and PR numbers from the trailing `(#12345)`.
 | `new-tag` | yes | | Tag being released. Must start with `v`, must not be a prerelease |
 | `pipeline` | yes | | Linear pipeline, by name or slug |
 | `linear-api-key` | yes | | Linear API key or OAuth token |
-| `openai-api-key` | yes | | Used by tildactl to write the note |
+| `tilda-password` | yes | | Password for the tildactl service account |
 | `gh-token` | yes | | Needs read on `tildabio/tools` and on `repo-name` |
+| `tilda-user` | no | `tildasense@tilda.bio` | Must be an `@tilda.bio` account |
+| `llm-base-url` | no | `https://q99n.tilda.pizza/v1` | LiteLLM gateway |
 | `old-tag` | no | *(resolved)* | Tag to compare from |
 | `bullets` | no | `30` | Total bullets across all sections; `0` is uncapped |
 | `release-name-prefix` | no | `Sense` | `Sense v2.10.24` |
 | `dry-run` | no | `false` | Write the note, change nothing in Linear |
 
 Outputs: `notes-path`, `old-tag`.
+
+## Gotchas
+
+- `tildactl login` with a service account **only works on Linux**. It refuses one on
+  macOS and Windows on purpose, so this cannot be reproduced verbatim on a laptop — log
+  in as yourself there instead.
+- Only `shared-neo4j` has a public gateway ingress today. If that changes host, override
+  `llm-base-url`.
+- The gateway refuses any identity outside `@tilda.bio`, at the edge and again in the CLI.
+- Calls land in the dashboard labelled `developer`. Labelling them per-operation needs an
+  `x-tilda-operation` header, which tildactl does not currently expose.

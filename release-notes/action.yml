@@ -19,9 +19,17 @@ inputs:
   pipeline:
     description: 'Linear release pipeline to publish into, by name or slug (e.g. "Sense Backend")'
     required: true
-  openai-api-key:
-    description: 'OpenAI key tildactl uses to write the note'
+  tilda-password:
+    description: 'Password for the tildactl service account (org secret TILDA_SENSE_PASSWORD)'
     required: true
+  tilda-user:
+    description: 'Identity tildactl logs in as. Must be an @tilda.bio account — the gateway refuses anything else'
+    required: false
+    default: 'tildasense@tilda.bio'
+  llm-base-url:
+    description: 'LiteLLM gateway. Only shared-neo4j has a public ingress today'
+    required: false
+    default: 'https://q99n.tilda.pizza/v1'
   gh-token:
     description: 'Token with read access to tildabio/tools and to repo-name'
     required: true
@@ -94,6 +102,21 @@ runs:
         python -m pip install --quiet "${RUNNER_TEMP}/tools/tilda-scripts"
         tildactl --help > /dev/null
 
+    # No provider key reaches CI: tildactl authenticates as a Tilda identity and the
+    # gateway's in-cluster sidecar attaches the real OpenAI key. Same login the other
+    # workflows use. It only works on Linux — login refuses a service account on
+    # macOS/Windows, which is a developer-machine guard, not a CI one.
+    - name: Log in to Tilda
+      shell: bash
+      env:
+        TILDA_USER: ${{ inputs.tilda-user }}
+        TILDA_PASSWORD: ${{ inputs.tilda-password }}
+      run: |
+        set -euo pipefail
+        tildactl login -u "$TILDA_USER" -p "$TILDA_PASSWORD"
+        tildactl version
+        test -s "$HOME/.tilda/id-token" || { echo "::error::login left no id-token"; exit 1; }
+
     - name: Generate release note
       id: notes
       shell: bash
@@ -102,13 +125,17 @@ runs:
         # and reads GH_TOKEN for it. It ignores the caller's actions/checkout, which is
         # still needed because linear-release scans THAT checkout.
         GH_TOKEN: ${{ inputs.gh-token }}
-        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        # The OpenAI SDK reads OPENAI_BASE_URL itself, so pointing tildactl at the
+        # gateway needs no code change. The bearer is the Auth0 id-token that
+        # `tildactl login` just wrote; Istio validates it at the edge.
+        OPENAI_BASE_URL: ${{ inputs.llm-base-url }}
         REPO_NAME: ${{ inputs.repo-name }}
         NEW_TAG: ${{ inputs.new-tag }}
         OLD_TAG: ${{ inputs.old-tag }}
         BULLETS: ${{ inputs.bullets }}
       run: |
         set -euo pipefail
+        export OPENAI_API_KEY="$(cat "$HOME/.tilda/id-token")"
         LOG="${RUNNER_TEMP}/tildactl.log"
 
         ARGS=(git generate-diff -r "$REPO_NAME" -n "$NEW_TAG" --bullets "$BULLETS")
