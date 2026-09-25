@@ -1,0 +1,159 @@
+name: 'Release Notes to Linear'
+description: 'Generate a release note with tildactl and publish it onto a Linear release'
+author: 'Tilda Bio'
+
+inputs:
+  repo-name:
+    description: 'Repo tildactl reads, as it is named under tildabio (e.g. main, cleopatra)'
+    required: true
+  new-tag:
+    description: 'Tag being released, e.g. v2.10.24. Must start with "v" and must not be a prerelease'
+    required: true
+  old-tag:
+    description: 'Tag to compare from, e.g. v2.10.23. Blank lets tildactl resolve the previous release tag'
+    required: false
+    default: ''
+  linear-access-key:
+    description: 'Linear PIPELINE access key (Settings > Releases > pipeline > access key). A personal API key will not work'
+    required: true
+  openai-api-key:
+    description: 'OpenAI key tildactl uses to write the note'
+    required: true
+  gh-token:
+    description: 'Token with read access to tildabio/tools and to repo-name'
+    required: true
+  bullets:
+    description: 'Total bullets across all change sections. 0 means uncapped'
+    required: false
+    default: '30'
+  release-name-prefix:
+    description: 'Prefix for the Linear release name, e.g. "Sense" gives "Sense v2.10.24"'
+    required: false
+    default: 'Sense'
+  dry-run:
+    description: 'Write the note and scan commits, but make no changes in Linear'
+    required: false
+    default: 'false'
+
+outputs:
+  notes-path:
+    description: 'Path to the generated markdown note'
+    value: ${{ steps.notes.outputs.notes-path }}
+  old-tag:
+    description: 'The start tag actually used, after tildactl resolved it'
+    value: ${{ steps.notes.outputs.old-tag }}
+
+runs:
+  using: composite
+  steps:
+    # Guards the manual path too. The job-level `if` in the caller stops a beta tag
+    # push from even starting a runner, but workflow_dispatch takes a free-text tag
+    # and nothing upstream checks it.
+    - name: Validate tag
+      shell: bash
+      env:
+        NEW_TAG: ${{ inputs.new-tag }}
+        OLD_TAG: ${{ inputs.old-tag }}
+      run: |
+        set -euo pipefail
+        case "$NEW_TAG" in
+          v*) ;;
+          *) echo "::error::new-tag must start with 'v' (got '$NEW_TAG')"; exit 1 ;;
+        esac
+        # Same set tildactl's _PRERELEASE skips when it resolves tags automatically.
+        if printf '%s' "$NEW_TAG" | grep -qiE -- '-(alpha|beta|rc|pre)'; then
+          echo "::error::'$NEW_TAG' is a prerelease tag; notes are only published for final tags"
+          exit 1
+        fi
+        if [ -n "$OLD_TAG" ]; then
+          case "$OLD_TAG" in
+            v*) ;;
+            *) echo "::error::old-tag must start with 'v' (got '$OLD_TAG')"; exit 1 ;;
+          esac
+        fi
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    # From source rather than the Artifact Registry wheel: every tilda-scripts
+    # dependency is on public PyPI, so this needs a GitHub token and nothing else.
+    # Installing the published package would drag in GCP auth for the private index.
+    - name: Install tildactl
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+      run: |
+        set -euo pipefail
+        git clone --depth 1 --quiet \
+          "https://x-access-token:${GH_TOKEN}@github.com/tildabio/tools" "${RUNNER_TEMP}/tools"
+        python -m pip install --quiet --upgrade pip
+        python -m pip install --quiet "${RUNNER_TEMP}/tools/tilda-scripts"
+        tildactl --help > /dev/null
+
+    - name: Generate release note
+      id: notes
+      shell: bash
+      env:
+        # tildactl clones tildabio/<repo> into $HOME/<repo> itself (commons/cloneRepo/clone.sh)
+        # and reads GH_TOKEN for it. It ignores the caller's actions/checkout, which is
+        # still needed because linear-release scans THAT checkout.
+        GH_TOKEN: ${{ inputs.gh-token }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        REPO_NAME: ${{ inputs.repo-name }}
+        NEW_TAG: ${{ inputs.new-tag }}
+        OLD_TAG: ${{ inputs.old-tag }}
+        BULLETS: ${{ inputs.bullets }}
+      run: |
+        set -euo pipefail
+        LOG="${RUNNER_TEMP}/tildactl.log"
+
+        ARGS=(git generate-diff -r "$REPO_NAME" -n "$NEW_TAG" --bullets "$BULLETS")
+        if [ -n "$OLD_TAG" ]; then ARGS+=(-o "$OLD_TAG"); fi
+
+        set +e
+        tildactl "${ARGS[@]}" 2>&1 | tee "$LOG"
+        STATUS=${PIPESTATUS[0]}
+        set -e
+
+        # A failure to render one repo's 40 MB HTML diff exits non-zero but still writes
+        # the note, which is the only artefact this action cares about. Judge on the note.
+        NOTES_PATH=$(sed -e 's/\x1b\[[0-9;]*m//g' "$LOG" \
+          | grep -oE '^Release notes written to .+$' | tail -1 \
+          | sed 's/^Release notes written to //')
+
+        if [ -z "$NOTES_PATH" ] || [ ! -s "$NOTES_PATH" ]; then
+          echo "::error::tildactl produced no release note (exit ${STATUS}). See the log above."
+          exit 1
+        fi
+
+        # release_label() names the file "<old>-<new>" for a single repo, so the start
+        # tag tildactl settled on is recoverable from the filename. It is handed to
+        # linear-release as base_ref so both halves describe the same commit range.
+        STEM=$(basename "$NOTES_PATH" .md)
+        STEM=${STEM#release-notes-}
+        RESOLVED_OLD=${STEM%-"$NEW_TAG"}
+        if [ "$RESOLVED_OLD" = "$STEM" ]; then RESOLVED_OLD=""; fi
+
+        echo "notes-path=${NOTES_PATH}" >> "$GITHUB_OUTPUT"
+        echo "old-tag=${RESOLVED_OLD}"  >> "$GITHUB_OUTPUT"
+        echo "Range: ${RESOLVED_OLD:-<repo start>} -> ${NEW_TAG}"
+        { echo "### Release note — ${NEW_TAG}"; echo; cat "$NOTES_PATH"; } >> "$GITHUB_STEP_SUMMARY"
+
+    # Before the Linear call, so a manual run still hands back the note if Linear rejects it.
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-notes-${{ inputs.repo-name }}-${{ inputs.new-tag }}
+        path: ${{ steps.notes.outputs.notes-path }}
+        if-no-files-found: error
+
+    - name: Publish to Linear
+      uses: linear/linear-release-action@v0
+      with:
+        access_key: ${{ inputs.linear-access-key }}
+        command: sync
+        version: ${{ inputs.new-tag }}
+        name: ${{ inputs.release-name-prefix }} ${{ inputs.new-tag }}
+        base_ref: ${{ steps.notes.outputs.old-tag }}
+        release_notes: ${{ steps.notes.outputs.notes-path }}
+        dry_run: ${{ inputs.dry-run }}
