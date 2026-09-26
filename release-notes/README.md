@@ -38,9 +38,14 @@ release pipeline, in one step.
 
 One `releaseSync` call creates the release, attaches every issue and pull request
 referenced in the tag range, stores the tag's commit SHA and upserts the note. Re-running
-the same tag **updates** that release rather than creating another — a continuous pipeline
-identifies a release by commit SHA, and the note upsert covers only that release. So a
-failed run is safe to retry, and a manual re-run refreshes an existing release.
+the same tag **updates** that release rather than creating another, so a failed run is safe
+to retry and a manual re-run refreshes an existing release. Verified: a second and third run
+of `v2.10.23` left the release count unchanged and the release still carrying one note.
+
+The identity is the **version string**, not the commit SHA. Two releases can sit on the same
+commit if their versions differ — `2.10.23` and `v2.10.23` are two releases, as measured. The
+action always derives the version from the tag, so this only bites if something else writes
+to the same pipeline using a different convention.
 
 Issue references are read from commit subjects (`ENG-`, `SUP-`, `TDM-`, `OPS-`) over the
 same range the note describes, and PR numbers from the trailing `(#12345)`.
@@ -87,3 +92,5 @@ Outputs: `notes-path`, `old-tag`.
 - The gateway refuses any identity outside `@tilda.bio`, at the edge and again in the CLI.
 - Calls land in the dashboard labelled `developer`. Labelling them per-operation needs an
   `x-tilda-operation` header, which tildactl does not currently expose.
+- `workflow_dispatch` can be run from a non-default branch (`gh workflow run <file> --ref
+  <branch>`), so this is testable from a PR branch before merging.
