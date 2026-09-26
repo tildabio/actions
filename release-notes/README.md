@@ -3,15 +3,33 @@
 Generates a release note with `tildactl` and publishes it onto a release in a Linear
 release pipeline, in one step.
 
+Most callers want the **reusable workflow**, which supplies the checkout and every
+credential, so the calling repo names none of them:
+
+```yaml
+jobs:
+  publish:
+    uses: tildabio/actions/.github/workflows/release-notes.yml@main
+    with:
+      repo-name: main
+      pipeline: Release notes generator backend
+      new-tag: ${{ github.event.inputs.new-tag || github.ref_name }}
+      old-tag: ${{ github.event.inputs.old-tag || '' }}
+    secrets: inherit
+```
+
+The composite action below is what that workflow wraps. Use it directly only if you need
+these steps inside a job that does other things too:
+
 ```yaml
 - uses: actions/checkout@v4
   with: { ref: ${{ github.ref_name }}, fetch-depth: 0 }
 
 - uses: tildabio/actions/release-notes@main
   with:
-    repo-name: main                 # as named under tildabio
-    new-tag: ${{ github.ref_name }} # v2.10.24
-    pipeline: Sense Backend         # Linear pipeline, by name or slug
+    repo-name: main
+    new-tag: ${{ github.ref_name }}
+    pipeline: Release notes generator backend
     linear-api-key: ${{ secrets.LINEAR_API_KEY }}
     tilda-password: ${{ secrets.TILDA_SENSE_PASSWORD }}
     gh-token:       ${{ secrets.GH_TOKEN }}
@@ -92,5 +110,7 @@ Outputs: `notes-path`, `old-tag`.
 - The gateway refuses any identity outside `@tilda.bio`, at the edge and again in the CLI.
 - Calls land in the dashboard labelled `developer`. Labelling them per-operation needs an
   `x-tilda-operation` header, which tildactl does not currently expose.
-- `workflow_dispatch` can be run from a non-default branch (`gh workflow run <file> --ref
-  <branch>`), so this is testable from a PR branch before merging.
+- `workflow_dispatch` cannot be used to test an unmerged workflow. GitHub resolves the
+  workflow by filename against its registry, and a file that has never run is not in it —
+  `gh workflow run … --ref <branch>` returns 404. Register it first with a push-triggered
+  run on a scratch branch, or merge to the default branch.
