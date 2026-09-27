@@ -48,6 +48,15 @@ runs:
           exit 0
         fi
 
+        # Normalize the PR body once, up front: collapse runs of whitespace, then
+        # lowercase. Both sed and tr read their input to EOF, so neither can leave a
+        # writer holding a broken pipe. LC_ALL=C makes tr byte-oriented, which is why
+        # the old "2>/dev/null || run it again without tr" fallback is no longer
+        # needed -- that existed to survive tr choking on invalid multibyte input.
+        NORMALIZED_BODY=$(printf '%s\n' "$PR_BODY" \
+          | sed 's/[[:space:]]\{1,\}/ /g' \
+          | LC_ALL=C tr '[:upper:]' '[:lower:]')
+
         # Determine target branch based on base branch
         # If merging to master/main → check for production
         # If merging to production → check for master/main
@@ -55,7 +64,7 @@ runs:
           TARGET_BRANCH="production"
         elif [[ "$BASE_BRANCH" == "production" ]]; then
           # Try to detect if repo uses master or main by checking PR body
-          if printf '%s\n' "$PR_BODY" | grep -iq "merge this pr into branch main"; then
+          if [[ "$NORMALIZED_BODY" == *"merge this pr into branch main"* ]]; then
             TARGET_BRANCH="main"
           else
             TARGET_BRANCH="master"
@@ -66,31 +75,32 @@ runs:
           exit 0
         fi
 
-        # Use environment variable instead of direct substitution to avoid shell interpretation
-        # Write PR body to file safely using printf to properly expand the variable
-        printf '%s\n' "$PR_BODY" > /tmp/pr_body.txt
-
-        # Normalize the PR body more robustly - handle Unicode and special characters properly
-        # Use sed instead of tr for better Unicode support
-        NORMALIZED_BODY=$(cat /tmp/pr_body.txt | sed 's/[[:space:]]\+/ /g' | tr '[:upper:]' '[:lower:]' 2>/dev/null || cat /tmp/pr_body.txt | sed 's/[[:space:]]\+/ /g')
-
         # Define the exact patterns we're looking for (more precise matching)
-        TARGET_BRANCH_LOWER=$(echo "$TARGET_BRANCH" | tr '[:upper:]' '[:lower:]')
+        TARGET_BRANCH_LOWER=$(printf '%s' "$TARGET_BRANCH" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         YES_PATTERN="merge this pr into branch ${TARGET_BRANCH_LOWER}: yes"
         NO_PATTERN="merge this pr into branch ${TARGET_BRANCH_LOWER}: no"
         PLACEHOLDER_PATTERN="**[replace with yes or no]**"
 
         # Debug: Print normalized body for troubleshooting (first 200 chars)
+        #
+        # This used to be `printf '%s\n' "$NORMALIZED_BODY" | head -c 200`, which under
+        # this step's `bash -e -o pipefail` could fail the whole job: head exits as soon
+        # as it has its 200 bytes, and a printf write landing after that gets EPIPE.
+        # pipefail then surfaced printf's non-zero status and -e aborted the step BEFORE
+        # any decision logic ran, so a perfectly valid PR body was reported as missing a
+        # merge decision. Bash substring expansion needs no pipe and no subprocess.
         echo "DEBUG: Base branch: $BASE_BRANCH"
         echo "DEBUG: Target branch: $TARGET_BRANCH"
         echo "DEBUG: Normalized body (first 200 chars):"
-        printf '%s\n' "$NORMALIZED_BODY" | head -c 200
+        echo "${NORMALIZED_BODY:0:200}"
         echo "..."
         echo ""
 
-        # Use a more robust pattern matching approach that handles special characters
+        # Match with bash's own substring test: it is a literal (non-regex) comparison,
+        # like grep -F, and involves no pipes at all. The patterns contain characters
+        # that are regex metacharacters, so any grep without -F misreads them.
         # Check if both Yes and No are present
-        if printf '%s\n' "$NORMALIZED_BODY" | grep -q "$YES_PATTERN" && printf '%s\n' "$NORMALIZED_BODY" | grep -q "$NO_PATTERN"; then
+        if [[ "$NORMALIZED_BODY" == *"$YES_PATTERN"* ]] && [[ "$NORMALIZED_BODY" == *"$NO_PATTERN"* ]]; then
           echo "validation_status=conflicting" >> $GITHUB_OUTPUT
           echo "❌ ERROR: Both 'Yes' and 'No' found in PR description."
           echo ""
@@ -99,16 +109,19 @@ runs:
         fi
 
         # Check for valid decision FIRST - if we find a valid decision, accept it
-        # Use grep with fixed strings (-F) to avoid regex interpretation issues with special characters
-        if printf '%s\n' "$NORMALIZED_BODY" | grep -F "$YES_PATTERN" > /dev/null; then
+        if [[ "$NORMALIZED_BODY" == *"$YES_PATTERN"* ]]; then
           echo "validation_status=valid_yes" >> $GITHUB_OUTPUT
           echo "✅ Decision: Will merge to $TARGET_BRANCH branch"
-        elif printf '%s\n' "$NORMALIZED_BODY" | grep -F "$NO_PATTERN" > /dev/null; then
+        elif [[ "$NORMALIZED_BODY" == *"$NO_PATTERN"* ]]; then
           echo "validation_status=valid_no" >> $GITHUB_OUTPUT
           echo "✅ Decision: Will NOT merge to $TARGET_BRANCH branch"
         else
-          # Only check for placeholder if no valid decision was found
-          if printf '%s\n' "$NORMALIZED_BODY" | grep -q "$PLACEHOLDER_PATTERN"; then
+          # Only check for placeholder if no valid decision was found.
+          # `grep -q "$PLACEHOLDER_PATTERN"` matched EVERY body: as a regex,
+          # [replace with yes or no] is a character class, so any body containing one of
+          # those letters matched. That made the "invalid" branch below unreachable and
+          # told authors who had simply omitted the line to "replace the placeholder".
+          if [[ "$NORMALIZED_BODY" == *"$PLACEHOLDER_PATTERN"* ]]; then
             echo "validation_status=placeholder" >> $GITHUB_OUTPUT
             echo "❌ ERROR: Please replace the placeholder with your decision."
             echo ""
@@ -132,9 +145,6 @@ runs:
 
         # Export TARGET_BRANCH for use in comment step
         echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-
-        # Cleanup temporary file
-        rm -f /tmp/pr_body.txt
 
     - name: Checkout repository for commenting
       if: failure()
