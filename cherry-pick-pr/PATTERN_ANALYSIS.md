@@ -1,3 +1,6 @@
+> **Superseded.** The decision is now read by [`merge-decision/decision.py`](../merge-decision), shared with the
+> validate-merge-decision check. This analysis of the old regex is kept for history.
+
 # Pattern Matching Deep Analysis
 
 This document details the comprehensive research and testing performed to ensure robust pattern matching in the cherry-pick action.

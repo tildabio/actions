@@ -1,0 +1,96 @@
+name: Merge decision
+
+# merge-decision/decision.py is what validate-merge-decision checks a PR description against and what cherry-pick-pr
+# acts on after the merge. Every change to it, or to either action, runs its tests and then the real check action on
+# this PR: a failing description, the same again, then a fixed one. That proves the outputs, the failure, and that the
+# PR gets one comment which is edited in place (and finally marked fixed) instead of a new one per edit.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'merge-decision/**'
+      - 'validate-merge-decision/**'
+      - 'cherry-pick-pr/**'
+      - '.github/workflows/merge-decision.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Parser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - run: python -m pytest -q merge-decision
+
+  action:
+    name: The check, run for real
+    runs-on: ubuntu-latest
+    needs: tests
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A PR into production that decides about production (fails)
+        id: wrong
+        continue-on-error: true
+        uses: ./validate-merge-decision
+        with:
+          base-branch: production
+          pr-body: "- Merge this PR into branch production: No"
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-user: ${{ github.event.pull_request.user.login }}
+          repository: ${{ github.repository }}
+
+      - name: The same again (fails, edits the same comment)
+        id: again
+        continue-on-error: true
+        uses: ./validate-merge-decision
+        with:
+          base-branch: production
+          pr-body: "- Merge this PR into branch production: No"
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-user: ${{ github.event.pull_request.user.login }}
+          repository: ${{ github.repository }}
+
+      - name: Fixed, with bold and a bullet (passes, marks the comment fixed)
+        id: fixed
+        uses: ./validate-merge-decision
+        with:
+          base-branch: production
+          pr-body: "* Merge this PR into branch **master**: **No** - production only"
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-user: ${{ github.event.pull_request.user.login }}
+          repository: ${{ github.repository }}
+
+      - name: Check what happened
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WRONG: ${{ steps.wrong.outcome }}/${{ steps.wrong.outputs.validation-status }}/${{ steps.wrong.outputs.target-branch }}
+          AGAIN: ${{ steps.again.outcome }}
+          FIXED: ${{ steps.fixed.outcome }}/${{ steps.fixed.outputs.validation-status }}/${{ steps.fixed.outputs.decision }}
+        run: |
+          set -e
+          echo "wrong=$WRONG again=$AGAIN fixed=$FIXED"
+          [ "$WRONG" = "failure/wrong_branch/master" ]
+          [ "$AGAIN" = "failure" ]
+          [ "$FIXED" = "success/valid_no/no" ]
+          bodies=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" --paginate \
+                     --jq '[.[] | select(.body | contains("<!-- tildabio/actions validate-merge-decision -->")) | .body]')
+          echo "$bodies" | jq -r '.[]'
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" = "${{ github.repository }}" ]; then
+            [ "$(echo "$bodies" | jq length)" = "1" ] || { echo "expected exactly one comment, edited in place"; exit 1; }
+            echo "$bodies" | jq -r '.[0]' | grep -q "Merge decision found" || { echo "the comment should now say it is fixed"; exit 1; }
+          fi
