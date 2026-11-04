@@ -35,6 +35,8 @@ def status(body, target="production"):
     ("- **Merge this PR into branch production:** Yes", "valid_yes"),
     ("- Merge this PR into branch **production**: _No_", "valid_no"),
     ("- Merge this PR into branch `production`: `Yes`", "valid_yes"),
+    ("`Merge this PR into branch production: Yes`", "valid_yes"),                  # the line alone in backticks
+    ("- `Merge this PR into branch production: No` ✅", "valid_no"),
     ("- Merge this PR into branch ~~master~~ production: Yes", "valid_yes"),
     ("-   Merge   this  PR\tinto branch   production  :   Yes  ", "valid_yes"),
     ("- Merge this PR into branch production : Yes", "valid_yes"),          # non-breaking spaces
@@ -85,6 +87,8 @@ def test_how_a_line_reads(line, want):
     ("We should not merge this PR into production before Friday", "missing"),     # prose, not a decision line
     ("`validate-merge-decision` only greps the `Merge this PR into branch <target>: Yes/No` line", "missing"),
     ("erge this PR into branch production: No", "missing"),                       # truncated by a bot (main #16286)
+    ("- `Merge this PR into branch production: Yes` on a hotfix PR passes and cherry-picks.", "missing"),  # prose quoting it
+    ("> **`AGENTS.md`** says: master PRs -> `Merge this PR into branch production: Yes|No`", "missing"),  # a bot's summary
 ])
 def test_mistakes_are_named(line, want):
     assert status(line) == want

@@ -24,7 +24,8 @@ Forgiving about how it is written:
 Strict about what it says:
   * The answer is Yes or No (Y or N). "Yes/No", "Yes or No" and "[Replace with Yes or No]" are the unfilled template.
   * One answer: a Yes and a No for the same branch is a conflict, never a guess.
-  * The line has to start with "Merge this PR into": a sentence that merely mentions one is not a decision.
+  * The line has to start with "Merge this PR into": a sentence that merely mentions one, or opens by quoting one
+    in `backticks`, is not a decision.
   * A line about the wrong branch (a PR into production deciding about production) is called out by name.
 
     python3 decision.py validate --base <base branch> [--head <head branch>]   (the check)
@@ -98,6 +99,9 @@ def answer_of(value):
 
 
 FENCE = re.compile(r"^\s*(?:>\s*)*(```|~~~)")
+# A sentence that opens by quoting the line, "`Merge this PR into branch master: Yes` on a production PR ...", talks
+# ABOUT a decision; it is not one. (The line alone in backticks, or just the branch in backticks, still counts.)
+QUOTED = re.compile(r"^`+\s*merge\s+this\s+(?:pr|pull\s*request)\b[^`]*`+\s*(?=.*[a-z]{2,})", re.I)
 
 
 def lines_in(body):
@@ -107,6 +111,8 @@ def lines_in(body):
             fenced = not fenced  # a code block quotes text (examples, logs); it never holds the decision
             continue
         if fenced:
+            continue
+        if QUOTED.match(PREFIX.sub("", unicodedata.normalize("NFKC", raw)).strip()):
             continue
         m = LINE.match(plain(raw))
         if m:
