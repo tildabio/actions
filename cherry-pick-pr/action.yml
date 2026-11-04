@@ -45,6 +45,12 @@ inputs:
     default: |
       cherry-pick
       automerge
+  decision-branch:
+    description: >-
+      The branch the merge decision line has to name, when target-branch is a stand-in for it (a sandbox branch
+      standing in for production, say). Defaults to target-branch.
+    required: false
+    default: ''
   decision-pattern:
     description: 'Legacy: a custom regex to match instead of the shared parser (merge-decision/decision.py). Leave empty.'
     required: false
@@ -66,7 +72,7 @@ runs:
       shell: bash
       env:
         PR_BODY: ${{ inputs.pr-body }}
-        TARGET_BRANCH: ${{ inputs.target-branch }}
+        TARGET_BRANCH: ${{ inputs.decision-branch || inputs.target-branch }}
         CUSTOM_PATTERN: ${{ inputs.decision-pattern }}
       run: |
         if [ -n "$CUSTOM_PATTERN" ]; then

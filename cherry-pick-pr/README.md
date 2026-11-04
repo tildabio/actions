@@ -70,6 +70,7 @@ jobs:
 | `cherry-pick-branch-prefix` | Prefix for the cherry-pick branch name | No | `cherry-pick-` |
 | `cherry-pick-pr-body` | Body text for the created cherry-pick PR | No | `[x] cleanup branches` |
 | `labels` | Labels to add to cherry-pick PR (newline or comma separated) | No | `cherry-pick`<br>`automerge` |
+| `decision-branch` | The branch the decision line must name, when `target-branch` stands in for it (a sandbox) | No | `target-branch` |
 | `decision-pattern` | Custom regex pattern to search in PR body | No | Auto-generated |
 
 ## Outputs
