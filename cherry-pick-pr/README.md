@@ -6,7 +6,7 @@ A reusable GitHub Action that automatically cherry-picks merged PRs to a target 
 
 - ✅ Automatic cherry-pick based on PR body decision
 - ✅ Works with any branch names (master/main/production/staging/develop)
-- ✅ Configurable decision patterns
+- ✅ Reads the decision exactly like the validate-merge-decision check (shared parser)
 - ✅ Customizable labels and PR body
 - ✅ Safe validation before cherry-picking
 - ✅ Works across any repository
@@ -70,6 +70,7 @@ jobs:
 | `cherry-pick-branch-prefix` | Prefix for the cherry-pick branch name | No | `cherry-pick-` |
 | `cherry-pick-pr-body` | Body text for the created cherry-pick PR | No | `[x] cleanup branches` |
 | `labels` | Labels to add to cherry-pick PR (newline or comma separated) | No | `cherry-pick`<br>`automerge` |
+| `decision-branch` | The branch the decision line must name, when `target-branch` stands in for it (a sandbox) | No | `target-branch` |
 | `decision-pattern` | Custom regex pattern to search in PR body | No | Auto-generated |
 
 ## Outputs
@@ -81,9 +82,11 @@ jobs:
 
 ## How It Works
 
-1. **Decision Check**: The action looks for a decision pattern in the PR body
-   - Default pattern: `Merge this PR into branch {target-branch}: Yes`
-   - Case insensitive, extra spaces are okay
+1. **Decision Check**: the PR body is read by [`merge-decision/decision.py`](../merge-decision), the same parser the
+   `validate-merge-decision` check uses, so a description that passes the check is exactly what this action acts on.
+   Only an unambiguous `Merge this PR into branch {target-branch}: Yes` cherry-picks; formatting (bold, bullets,
+   spacing, case, punctuation, commentary after the answer) does not matter. See [its README](../merge-decision/README.md)
+   for every accepted and rejected form.
 
 2. **Cherry Pick**: If approved, creates a new PR with the changes cherry-picked to the target branch
 
@@ -91,75 +94,11 @@ jobs:
 
 ## PR Body Format
 
-Add this line to your PR description to trigger cherry-picking:
-
 ```
 Merge this PR into branch production: Yes
 ```
 
-Or for other branches:
-```
-Merge this PR into branch staging: Yes
-Merge this PR into branch main: Yes
-```
-
-### Flexible Matching
-
-The action is very forgiving and handles common typos/variations:
-
-✅ **Case insensitive**:
-- `Merge this PR into branch production: Yes`
-- `MERGE THIS PR INTO BRANCH PRODUCTION: YES`
-- `merge this pr into branch production: yes`
-
-✅ **Extra spaces**:
-- `Merge  this  PR  into  branch  production : Yes` (multiple spaces)
-- `Merge this PR into branch production :Yes` (no space after colon)
-
-✅ **Extra text after "yes"**:
-- `Merge this PR into branch production: Yes!!!`
-- `Merge this PR into branch production: Yes.`
-- `Merge this PR into branch production: Yes\n\nSome other description...`
-
-❌ **Won't match** (correctly rejected):
-- `Merge this PR into branch production: yes/no` (ambiguous - has slash)
-- `Merge this PR into branch production: yesno` (concatenated - no word boundary)
-- `Merge this PR into branch production: yesterday` (false positive prevented)
-- `Merge this PR into branch production: No`
-- `Merge this PR into branch production: Maybe`
-- `Merge this PR into branch release-v1x0: Yes` (typo in branch name)
-
-## Technical Details
-
-### Pattern Matching Features
-
-The action uses advanced regex with:
-
-1. **Word Boundaries** (`\<yes\>`) - Prevents false positives from words containing "yes"
-2. **Regex Escaping** - Handles branch names with special characters (dots, slashes, etc.)
-3. **Slash Detection** - Explicitly rejects "yes/no" or "yes/" patterns
-4. **Flexible Whitespace** - Handles tabs, newlines, multiple spaces
-5. **Case Insensitive** - Accepts any case combination
-
-### Edge Cases Handled
-
-| Input | Result | Reason |
-|-------|--------|--------|
-| `yes` | ✅ Accept | Valid decision |
-| `YES!!!` | ✅ Accept | Punctuation allowed |
-| `Yes, after review` | ✅ Accept | Additional text allowed |
-| `yesterday` | ❌ Reject | Word boundary check |
-| `yesno` | ❌ Reject | Word boundary check |
-| `yes/no` | ❌ Reject | Explicit slash detection |
-| `yes/maybe` | ❌ Reject | Explicit slash detection |
-
-### Branch Name Support
-
-Works with branches containing special characters:
-- `production`, `staging`, `develop` ✅
-- `release/v1.0`, `hotfix/urgent` ✅
-- `feature-branch`, `bug_fix` ✅
-- Prevents typos: `release-v1x0` won't match `release-v1.0` ✅
+`decision-pattern` (a custom regex) still works for callers that set it, but bypasses the shared parser: leave it empty.
 
 ## Complete Workflow Example
 

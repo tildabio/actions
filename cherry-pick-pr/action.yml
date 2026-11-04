@@ -45,8 +45,14 @@ inputs:
     default: |
       cherry-pick
       automerge
+  decision-branch:
+    description: >-
+      The branch the merge decision line has to name, when target-branch is a stand-in for it (a sandbox branch
+      standing in for production, say). Defaults to target-branch.
+    required: false
+    default: ''
   decision-pattern:
-    description: 'Custom decision pattern to search (optional, auto-generated from target-branch if not provided)'
+    description: 'Legacy: a custom regex to match instead of the shared parser (merge-decision/decision.py). Leave empty.'
     required: false
     default: ''
 
@@ -66,79 +72,26 @@ runs:
       shell: bash
       env:
         PR_BODY: ${{ inputs.pr-body }}
-        TARGET_BRANCH: ${{ inputs.target-branch }}
+        TARGET_BRANCH: ${{ inputs.decision-branch || inputs.target-branch }}
         CUSTOM_PATTERN: ${{ inputs.decision-pattern }}
       run: |
-        # Debug: Show what we're working with (first 200 chars for security)
-        echo "🔍 PR Body (first 200 chars): ${PR_BODY:0:200}"
-        echo "📏 PR Body length: ${#PR_BODY}"
-        echo "🎯 Target branch: $TARGET_BRANCH"
-
-        # Validate PR_BODY is not empty
-        if [ -z "$PR_BODY" ]; then
-          echo "⚠️ PR body is empty"
-          echo "should_merge=false" >> $GITHUB_OUTPUT
+        if [ -n "$CUSTOM_PATTERN" ]; then
+          # Legacy: a caller-supplied regex, matched as before (lower-cased, whitespace collapsed). New callers should
+          # leave decision-pattern empty: the shared parser below is what validate-merge-decision checks against.
+          NORMALIZED_BODY=$(printf '%s\n' "$PR_BODY" | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]')
+          if printf '%s\n' "$NORMALIZED_BODY" | grep -qE "$CUSTOM_PATTERN"; then
+            echo "should_merge=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Custom pattern matched: will cherry-pick to $TARGET_BRANCH"
+          else
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ Custom pattern not matched: will NOT cherry-pick to $TARGET_BRANCH"
+          fi
           exit 0
         fi
-
-        # Write PR body to temp file safely using printf to avoid shell interpretation
-        # This prevents issues with:
-        # - Backslash escapes (echo interprets \n, \t, etc.)
-        # - Command substitution attempts in malicious PR bodies
-        # - Very long bodies that might exceed command line limits
-        printf '%s\n' "$PR_BODY" > /tmp/pr_body_$$.txt
-
-        # Normalize the PR body:
-        # 1. Collapse multiple spaces/tabs/newlines into single space
-        # 2. Convert to lowercase for case-insensitive matching
-        # 3. Trim leading/trailing whitespace
-        # Use cat + pipeline instead of echo for safety
-        NORMALIZED_BODY=$(cat /tmp/pr_body_$$.txt | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-        # Clean up temp file
-        rm -f /tmp/pr_body_$$.txt
-
-        echo "🔄 Normalized body (first 100 chars): ${NORMALIZED_BODY:0:100}"
-
-        # Determine the pattern to search for
-        if [ -n "$CUSTOM_PATTERN" ]; then
-          SEARCH_PATTERN="$CUSTOM_PATTERN"
-          echo "📝 Using custom pattern: $SEARCH_PATTERN"
-        else
-          # Escape special regex characters in branch name (e.g., "release-v1.0" has ".")
-          TARGET_BRANCH_LOWER=$(echo "${TARGET_BRANCH}" | tr '[:upper:]' '[:lower:]')
-          TARGET_BRANCH_ESCAPED=$(echo "${TARGET_BRANCH_LOWER}" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
-
-          # Flexible pattern with word boundaries to prevent false positives
-          # Uses \<yes\> to match "yes" as a complete word, preventing:
-          # - "yesterday" (false positive)
-          # - "yesno" (false positive)
-          # Still accepts:
-          # - "yes!" "yes." "yes," (punctuation after yes)
-          # - "yes followed by more text"
-          SEARCH_PATTERN="merge[[:space:]]+this[[:space:]]+pr[[:space:]]+into[[:space:]]+branch[[:space:]]+${TARGET_BRANCH_ESCAPED}[[:space:]]*:[[:space:]]*\<yes\>"
-          echo "📝 Using auto-generated pattern for branch: $TARGET_BRANCH"
-        fi
-
-        # Check for Yes decision
-        if echo "$NORMALIZED_BODY" | grep -qE "$SEARCH_PATTERN"; then
-          # Additional safety check: explicitly reject "yes/no" or "yes/" patterns
-          if echo "$NORMALIZED_BODY" | grep -qE ":[[:space:]]*\<yes\>[[:space:]]*/"; then
-            echo "should_merge=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Ambiguous decision detected: 'yes/' pattern found"
-            echo "📝 Please use either 'Yes' or 'No', not both"
-            exit 0
-          fi
-
-          # Valid "yes" decision found
-          echo "should_merge=true" >> $GITHUB_OUTPUT
-          echo "✅ Will cherry-pick to $TARGET_BRANCH branch"
-          echo "🎯 Found merge directive in PR body"
-        else
-          echo "should_merge=false" >> $GITHUB_OUTPUT
-          echo "ℹ️ Will NOT cherry-pick to $TARGET_BRANCH branch"
-          echo "📝 No merge directive found in PR body"
-        fi
+        # The same parser the validate-merge-decision check uses (merge-decision/decision.py): the check and the
+        # cherry-pick read a description identically. Only an unambiguous Yes for this branch cherry-picks; No, a
+        # missing or unfilled line, or a Yes and a No together, do not.
+        python3 "$GITHUB_ACTION_PATH/../merge-decision/decision.py" should-merge --target "$TARGET_BRANCH"
 
     - name: Checkout repository
       if: steps.check-decision.outputs.should_merge == 'true'
