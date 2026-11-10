@@ -54,6 +54,25 @@ inputs:
       GOCACHE/module mounts, so the registry import is redundant (~34s/job).
     required: false
     default: "true"
+  builder-name:
+    description: >
+      Reuse an existing buildx builder by name instead of letting
+      docker/setup-buildx-action generate a throwaway one. Only meaningful on a
+      persistent (self-hosted) runner where that builder's BuildKit cache
+      mounts (apk/apt/uv/go) survive between jobs — on ubuntu-latest a fresh
+      runner has no such builder to find, so leave this empty there.
+    required: false
+    default: ""
+  builder-persistent:
+    description: >
+      Set to 'true' only when builder-name points at a builder meant to
+      outlive this job (a self-hosted runner's own persistent builder).
+      Passes cleanup: false to docker/setup-buildx-action (default behavior
+      deletes the builder at job end) and skips the Go GHA-cache dance below
+      — a persistent builder's own disk cache already covers what that dance
+      exists to work around on ephemeral runners.
+    required: false
+    default: "false"
 outputs:
   image:
     description: "Fully-qualified image reference that was built (registry/project/path:tag)"
@@ -103,6 +122,13 @@ runs:
     - name: Set up Docker Buildx
       id: buildx
       uses: docker/setup-buildx-action@v4
+      with:
+        # Empty name/cleanup=true (ubuntu-latest's defaults) reproduce exactly
+        # what this step did before these inputs existed. name: '' is treated
+        # the same as the input being absent (setup-buildx-action generates a
+        # throwaway builder either way).
+        name: ${{ inputs.builder-name }}
+        cleanup: ${{ inputs.builder-persistent == 'true' && 'false' || 'true' }}
 
     # ── Persist BuildKit cache mounts across ephemeral runners ──────────────
     # The Go build/module cache lives in --mount=type=cache mounts inside the
@@ -130,7 +156,7 @@ runs:
     # what makes compiles fast, so dropping the module cache is a clean win.
     - name: Go cache — restore + save (default branch)
       id: go-cache-rw
-      if: inputs.cache == 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      if: inputs.cache == 'true' && inputs.builder-persistent != 'true' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
       uses: actions/cache@v6
       with:
         path: go-build-cache
@@ -140,7 +166,7 @@ runs:
 
     - name: Go cache — restore only (non-default branches)
       id: go-cache-ro
-      if: inputs.cache == 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      if: inputs.cache == 'true' && inputs.builder-persistent != 'true' && !(github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
       uses: actions/cache/restore@v6
       with:
         path: go-build-cache
@@ -148,8 +174,11 @@ runs:
         restore-keys: |
           gocache-${{ inputs.cache-scope || inputs.service-name }}-
 
+    # Skipped entirely on a persistent builder: its own disk-backed
+    # /root/.cache/go-build mount is already warm across jobs, which is what
+    # this GHA-cache round-trip exists to fake on an ephemeral runner.
     - name: Inject Go cache into BuildKit
-      if: inputs.cache == 'true'
+      if: inputs.cache == 'true' && inputs.builder-persistent != 'true'
       uses: reproducible-containers/buildkit-cache-dance@v3.4.0
       with:
         cache-map: |
