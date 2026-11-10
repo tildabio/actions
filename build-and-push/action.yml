@@ -105,35 +105,14 @@ runs:
     # Artifact Registry `FROM` fell back to an anonymous token and got a 403 --
     # while public-base images built fine, making it look service-specific.
     - name: Authenticate to Google Cloud
-      if: inputs.google-key != '' && inputs.builder-persistent != 'true'
+      if: inputs.google-key != ''
       uses: google-github-actions/auth@v3
       with:
         credentials_json: ${{ inputs.google-key }}
 
     - name: Set up gcloud
-      if: inputs.google-key != '' && inputs.builder-persistent != 'true'
+      if: inputs.google-key != ''
       uses: google-github-actions/setup-gcloud@v3
-
-    # The two steps above cost a real, measured ~2-4s each of pure Action
-    # (Node runtime) startup on top of the actual auth work, paid by every
-    # single job. On a persistent builder gcloud is already on PATH (the VM's
-    # bootstrap installs it) and this job's runner isn't torn down after, so
-    # one direct `gcloud auth activate-service-account` does the same job
-    # auth@v3 + setup-gcloud together do, without either wrapper's overhead.
-    #
-    # This still activates the per-job GKE_KEY, not the VM's own attached
-    # service account — ci-exp-builder@tilda-trial-automation has no IAM
-    # rights on tilda-dev-325721 (where these images actually push), so true
-    # zero-auth ADC isn't available yet. That would need someone with access
-    # to tilda-dev-325721 granting ci-exp-builder@tilda-trial-automation
-    # artifactregistry.writer there — ask for that explicitly; it removes
-    # this step (and its secret) entirely once done.
-    - name: Authenticate to Google Cloud (persistent builder)
-      if: inputs.google-key != '' && inputs.builder-persistent == 'true'
-      shell: bash
-      env:
-        GOOGLE_KEY: ${{ inputs.google-key }}
-      run: gcloud auth activate-service-account --key-file=- --quiet <<< "$GOOGLE_KEY"
 
     - name: Configure docker for Artifact Registry
       if: inputs.google-key != ''
