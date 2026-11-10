@@ -133,18 +133,7 @@ runs:
       shell: bash
       env:
         GOOGLE_KEY: ${{ inputs.google-key }}
-      # --key-file=- (stdin) misdetects a JSON key piped in and demands a p12
-      # ACCOUNT argument instead. A real temp file (0600, RUNNER_TEMP so it's
-      # already job-scoped and gone when the job ends) is what gcloud actually
-      # expects; deleted right after activation regardless of outcome.
-      run: |
-        keyfile="$RUNNER_TEMP/gcp-key.json"
-        umask 077
-        printf '%s' "$GOOGLE_KEY" > "$keyfile"
-        gcloud auth activate-service-account --key-file="$keyfile" --quiet
-        rc=$?
-        rm -f "$keyfile"
-        exit $rc
+      run: gcloud auth activate-service-account --key-file=- --quiet <<< "$GOOGLE_KEY"
 
     - name: Configure docker for Artifact Registry
       if: inputs.google-key != ''
