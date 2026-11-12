@@ -1,0 +1,72 @@
+name: Release notes to Linear
+
+# Reusable. Callers supply parameters and `secrets: inherit`; every credential is
+# read here, so the calling repo names none of them. The secrets themselves live at
+# the tildabio org level — a called workflow cannot read secrets belonging to the
+# repo it lives in, only the ones the caller passes down.
+on:
+  workflow_call:
+    inputs:
+      repo-name:
+        description: 'Repo tildactl reads, as named under tildabio'
+        required: true
+        type: string
+      pipeline:
+        description: 'Linear release pipeline, by name or slug'
+        required: true
+        type: string
+      new-tag:
+        description: 'Tag being released, e.g. v2.10.24'
+        required: true
+        type: string
+      old-tag:
+        description: 'Compare from this tag. Blank resolves the previous release tag'
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: 'Write the note but make no changes in Linear'
+        required: false
+        type: boolean
+        default: false
+      bullets:
+        description: 'Total bullets across all sections; 0 is uncapped'
+        required: false
+        type: number
+        default: 30
+      release-name-prefix:
+        description: 'Prefix for the Linear release name'
+        required: false
+        type: string
+        default: 'Sense'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish release notes
+    runs-on: ubuntu-latest
+    steps:
+      # No `repository:` — inside a reusable workflow this resolves to the CALLER's
+      # repo, which is the one being released. The issue scan reads this checkout, so
+      # it needs the tag's commit and full history.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.new-tag }}
+          fetch-depth: 0
+
+      # Pinned to the same ref as this workflow. `./release-notes` would resolve
+      # against the caller's checkout, not this repo, so the full path is required.
+      - uses: tildabio/actions/release-notes@eng-5880-release-notes-to-linear
+        with:
+          repo-name: ${{ inputs.repo-name }}
+          pipeline: ${{ inputs.pipeline }}
+          new-tag: ${{ inputs.new-tag }}
+          old-tag: ${{ inputs.old-tag }}
+          dry-run: ${{ inputs.dry-run }}
+          bullets: ${{ inputs.bullets }}
+          release-name-prefix: ${{ inputs.release-name-prefix }}
+          linear-api-key: ${{ secrets.LINEAR_API_KEY }}
+          tilda-password: ${{ secrets.TILDA_SENSE_PASSWORD }}
+          gh-token: ${{ secrets.GH_TOKEN }}
