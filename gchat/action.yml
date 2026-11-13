@@ -1,0 +1,24 @@
+name: "Gchat Notification"
+description: "Sends an input message to input space"
+inputs:
+  space:
+    description: "GChat space where messahe needs to be sent."
+    required: false
+  message:
+    description: "message string which needs to be sent."
+    required: false
+  gchat_key:
+    description: "GCHAT key"
+    required: true
+  gchat_token:
+    description: "GChat Token"
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send Gchat notification
+      shell: bash
+      run: |
+        curl --request POST -H "Content-Type: application/json" --location https://chat.googleapis.com/v1/spaces/${{ inputs.space }}/messages\?key\=${{ inputs.gchat_key }}\&token\=${{ inputs.gchat_token }} -d '{"text": "${{ inputs.message }}"}'
+
